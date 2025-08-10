@@ -8,14 +8,8 @@ private:
 	std::map<ValueType, KeyType> reverseMap;
 
 public:
-	constexpr std::map<KeyType, ValueType> GetForwardMap() const
-	{
-		return forwardMap;
-	}
-	constexpr std::map<KeyType, ValueType> GetReverseMap() const
-	{
-		return reverseMap;
-	}
+	const std::map<KeyType, ValueType>& GetForwardMap() const noexcept { return forwardMap; }
+	const std::map<KeyType, ValueType>& GetReverseMap() const noexcept { return reverseMap; }
 
 	void insert(KeyType key, ValueType value)
 	{
@@ -25,33 +19,35 @@ public:
 
 	ValueType getValue(KeyType key)
 	{
-		if (!forwardMap.contains(key)) {
-			throw std::out_of_range("Key not found");
-		}
-		return forwardMap[key];
+		auto it = forwardMap.find(key);
+		if (it == forwardMap.end())
+			throw std::out_of_range("Out of range");
+		return it->second;
 	}
 	ValueType getValueOrNull(KeyType key)
 	{
-		if (!forwardMap.contains(key)) {
+		static_assert(std::is_pointer_v<KeyType>);
+		auto it = forwardMap.find(key);
+		if (it == forwardMap.end())
 			return nullptr;
-		}
-		return forwardMap[key];
+		return it->second;
 	}
 
 	KeyType getKey(ValueType value)
 	{
-		if (!reverseMap.contains(value)) {
-			throw std::out_of_range("Value not found");
-		}
-		return reverseMap[value];
+		auto it = reverseMap.find(value);
+		if (it == reverseMap.end())
+			throw std::out_of_range("Out of range");
+		return it->second;
 	}
 
 	KeyType getKeyOrNull(ValueType value)
 	{
-		if (!reverseMap.contains(value)) {
+		static_assert(std::is_pointer_v<ValueType>);
+		auto it = reverseMap.find(value);
+		if (it == reverseMap.end())
 			return nullptr;
-		}
-		return reverseMap[value];
+		return it->second;
 	}
 
 	bool containsKey(KeyType key)

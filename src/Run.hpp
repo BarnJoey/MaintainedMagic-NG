@@ -69,6 +69,7 @@ namespace MAINT
 		inline bool DoSilenceFX;
 		inline long CostBaseDuration;
 		inline float CostReductionExponent; 
+		inline bool AllowBoundWeapons;
 		class ConfigBase
 		{
 		private:
@@ -185,6 +186,7 @@ namespace MAINT
 		typedef std::pair<InfiniteSpell*, DebuffSpell*> MaintainedSpell;
 
 		inline BiMap<RE::SpellItem*, MaintainedSpell> SpellToMaintainedSpell;
+		inline std::set<std::pair<RE::SpellItem*, RE::SpellItem*>> DeferredDispelList;
 	}
 
 	class FORMS
@@ -285,7 +287,7 @@ namespace MAINT
 			UpdatePC(pc, delta);
 			TimerActiveEffCheck += delta;
 			TimerExperienceAward += delta;
-			if (TimerActiveEffCheck >= 2.50f) {
+			if (TimerActiveEffCheck >= 0.50f) {
 				MAINT::ForceMaintainedSpellUpdate(pc);
 				MAINT::CheckUpkeepValidity(pc);
 				while (!EffectRestorationQueue.empty()) {

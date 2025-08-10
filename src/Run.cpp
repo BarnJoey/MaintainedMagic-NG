@@ -1,4 +1,5 @@
 #include "Run.hpp"
+#define INGAME_DEBUG
 
 namespace MAINT
 {
@@ -76,8 +77,22 @@ namespace MAINT
 			return false;
 		}
 		if (archetype == RE::EffectSetting::Archetype::kBoundWeapon) {
-			logger::info("Spell is bound weapon");
-			return false;
+			if (MAINT::CONFIG::AllowBoundWeapons == false) {
+				logger::info("Spell is bound weapon");
+				return false;
+			} else {
+				const auto& leftHand = theCaster->GetEquippedObject(true);
+				const auto& leftHandSpell = leftHand != nullptr ? leftHand->As<RE::SpellItem>() : nullptr;
+				const auto& rightHand = theCaster->GetEquippedObject(false);
+				const auto& rightHandSpell = rightHand != nullptr ? rightHand->As<RE::SpellItem>() : nullptr;
+				if (
+					(leftHandSpell != nullptr && leftHandSpell->effects[0]->baseEffect->data.associatedForm == theSpell->effects[0]->baseEffect->data.associatedForm) &&
+					(rightHandSpell != nullptr && rightHandSpell->effects[0]->baseEffect->data.associatedForm == theSpell->effects[0]->baseEffect->data.associatedForm)) {
+					logger::info("Player already has this bound weapon");
+					RE::DebugNotification(std::format("Only one instance of {} can be maintained.", theSpell->GetName()).c_str());
+					return false;
+				}
+			}
 		}
 		return true;
 	}
@@ -335,7 +350,18 @@ namespace MAINT
 		}
 
 		logger::info("\tAdding Constant Effect with Maintain Cost of {}", magCost);
-		theCaster->AddSpell(maintSpell);
+		if (baseSpell->effects[0]->baseEffect->HasArchetype(RE::EffectSetting::Archetype::kBoundWeapon)) {
+			auto equipMgr = RE::ActorEquipManager::GetSingleton();
+			if (theCaster->GetEquippedObject(true) == baseSpell->As<RE::TESForm>()) {
+				//RE::DebugNotification(std::format("Unequipping {} from left hand.", baseSpell->GetName()).c_str());
+				equipMgr->EquipSpell(theCaster, maintSpell, RE::TESForm::LookupByID<RE::BGSEquipSlot>(0x13F43));
+			} else if (theCaster->GetEquippedObject(false) == baseSpell->As<RE::TESForm>()) {
+				//RE::DebugNotification(std::format("Unequipping {} from right hand.", baseSpell->GetName()).c_str());
+				equipMgr->EquipSpell(theCaster, maintSpell, RE::TESForm::LookupByID<RE::BGSEquipSlot>(0x13F42));
+			}
+		} else {
+			theCaster->AddSpell(maintSpell);
+		}
 		theCaster->AddSpell(debuffSpell);
 		MAINT::CACHE::SpellToMaintainedSpell.insert(baseSpell, { maintSpell, debuffSpell });
 
@@ -401,6 +427,27 @@ namespace MAINT
 		static uint32_t _runCount{ 0 };
 		auto start = std::chrono::high_resolution_clock::now();
 
+		if (!MAINT::CACHE::DeferredDispelList.empty()) {
+			const auto& equipMgr = RE::ActorEquipManager::GetSingleton();
+			for (auto it = MAINT::CACHE::DeferredDispelList.begin(); it != MAINT::CACHE::DeferredDispelList.end();) {
+				const auto& [ maintSpell, baseSpell ] = *it;
+				bool doErase = false;
+				if (theActor->GetActorRuntimeData().selectedSpells[0] == maintSpell) {
+					equipMgr->EquipSpell(theActor, baseSpell, RE::TESForm::LookupByID<RE::BGSEquipSlot>(0x13F43));
+					doErase = true;
+				}
+				if (theActor->GetActorRuntimeData().selectedSpells[1] == maintSpell) {
+					equipMgr->EquipSpell(theActor, baseSpell, RE::TESForm::LookupByID<RE::BGSEquipSlot>(0x13F42));
+					doErase = true;
+				} 
+				if(doErase) {
+					MAINT::CACHE::DeferredDispelList.erase(it);
+				} else {
+					++it;
+				}
+			}
+		}
+
 		std::map<RE::SpellItem*, std::unordered_multiset<RE::ActiveEffect*>> SpellToActiveEffects;
 		static auto const& mmDebufEffect = MAINT::FORMS::GetSingleton().SpelMagickaDebuffTemplate->effects.front();
 
@@ -420,13 +467,52 @@ namespace MAINT
 		}
 
 		std::vector<std::pair<RE::SpellItem*, MAINT::CACHE::MaintainedSpell>> toRemove;
+		std::vector<RE::SpellItem*> toDefer;
 		for (const auto& [baseSpell, maintainedSpellPair] : MAINT::CACHE::SpellToMaintainedSpell.GetForwardMap()) {
 			const auto& [maintSpell, debuffSpell] = maintainedSpellPair;
+
+			if (baseSpell->effects[0]->baseEffect->HasArchetype(RE::EffectSetting::Archetype::kBoundWeapon)) {
+				const auto& right = theActor->GetEquippedObject(false);
+				const auto& left = theActor->GetEquippedObject(true);
+
+				bool found = false;
+				if (right && right->IsWeapon()) {
+					const auto& weap = right->As<RE::TESObjectWEAP>();
+					for (const auto& eff : baseSpell->effects) {
+						if (weap->formID == eff->baseEffect->data.associatedForm->formID) {
+							found = true;
+							break;
+						}
+					}
+					if (found)
+						continue;
+				} else {
+					auto rightSpell = theActor->GetActorRuntimeData().selectedSpells[1];
+					if (rightSpell == maintSpell && theActor->HasSpell(debuffSpell))
+						continue;
+				}
+				if (left && left->IsWeapon()) {
+					const auto& weap = right->As<RE::TESObjectWEAP>();
+					for (const auto& eff : baseSpell->effects) {
+						if (weap->formID == eff->baseEffect->data.associatedForm->formID) {
+							found = true;
+							break;
+						}
+					}
+					if (found)
+						continue;
+				} else {
+					auto leftSpell = theActor->GetActorRuntimeData().selectedSpells[0];
+					if (leftSpell == maintSpell && theActor->HasSpell(debuffSpell))
+						continue;
+				}
+			}
 
 			auto const& mSplInList = SpellToActiveEffects.find(maintSpell);
 
 			if (mSplInList == SpellToActiveEffects.end()) {
 				logger::debug("{} not found on Actor", maintSpell->GetName());
+				//RE::DebugNotification(std::format("{} not found on Actor", maintSpell->GetName()).c_str());
 				toRemove.emplace_back(std::make_pair(baseSpell, std::make_pair(maintSpell, debuffSpell)));
 				continue;
 			}
@@ -435,15 +521,20 @@ namespace MAINT
 			auto const& effSet = mSplInList->second;
 			if (mSpl->effects.size() < effSet.size()) {
 				logger::debug("{} EFF count mismatch: Spell has LESS", mSpl->GetName());
+				//RE::DebugNotification(std::format("{} EFF count mismatch: Spell has LESS", mSpl->GetName()).c_str());
 				logger::debug("\t{} has:", mSpl->GetName());
+				//RE::DebugNotification(std::format("\t{} has:", mSpl->GetName()).c_str());
 				short n = 1;
 				for (auto const& te : mSpl->effects) {
 					logger::debug("\t{}\t{}", n++, te->baseEffect->GetName());
+					//RE::DebugNotification(std::format("\t{}\t{}", n++, te->baseEffect->GetName()).c_str());
 				}
 				logger::debug("\tEffectSet has:");
+				//RE::DebugNotification("\tEffectSet has:");
 				n = 1;
 				for (auto const& te : effSet) {
 					logger::debug("\t{}\t{}, Src: {}", n++, te->effect->baseEffect->GetName(), te->spell ? te->spell->GetName() : "NULL/UNK");
+					//RE::DebugNotification(std::format("\t{}\t{}, Src: {}", n++, te->effect->baseEffect->GetName(), te->spell ? te->spell->GetName() : "NULL/UNK").c_str());
 				}
 				toRemove.emplace_back(std::make_pair(baseSpell, std::make_pair(maintSpell, debuffSpell)));
 				continue;
@@ -460,11 +551,14 @@ namespace MAINT
 					return uniqueItems;
 				};
 				logger::debug("{} EFF count mismatch: Spell has MORE", mSpl->GetName());
+				//RE::DebugNotification(std::format("{} EFF count mismatch: Spell has MORE", mSpl->GetName()).c_str());
 				logger::debug("\t{} has:", mSpl->GetName());
+				//RE::DebugNotification(std::format("\t{} has:", mSpl->GetName()).c_str());
 
 				short n = 1;
 				for (auto const& te : mSpl->effects) {
 					logger::debug("\t{}\t{} (0x{:08X})", n++, te->baseEffect->GetName(), te->baseEffect->GetFormID());
+					//RE::DebugNotification(std::format("\t{}\t{} (0x{:08X})", n++, te->baseEffect->GetName(), te->baseEffect->GetFormID()).c_str());
 				}
 
 				auto const& uniqueList = getUniques(mSpl->effects);
@@ -473,12 +567,14 @@ namespace MAINT
 					n = 1;
 					for (auto const& te : uniqueList) {
 						logger::debug("\t{}\t{} (0x{:08X}) # Assoc: {}", n++, te->baseEffect->GetName(), te->baseEffect->GetFormID(), te->baseEffect->data.associatedForm->GetName());
+						//RE::DebugNotification(std::format("\t{}\t{} (0x{:08X}) # Assoc: {}", n++, te->baseEffect->GetName(), te->baseEffect->GetFormID(), te->baseEffect->data.associatedForm->GetName()).c_str());
 					}
 				}
 				logger::debug("\tEffectSet has:");
 				n = 1;
 				for (auto const& te : effSet) {
 					logger::debug("\t{}\t{} (0x{}), Src: {}", n++, te->effect->baseEffect->GetName(), te->effect->baseEffect->GetFormID(), te->spell ? te->spell->GetName() : "NULL/UNK");
+					//RE::DebugNotification(std::format("\t{}\t{} (0x{}), Src: {}", n++, te->effect->baseEffect->GetName(), te->effect->baseEffect->GetFormID(), te->spell ? te->spell->GetName() : "NULL/UNK").c_str());
 				}
 
 				auto const& hasDifferentSource = std::find_if(effSet.begin(), effSet.end(), [&](RE::ActiveEffect* e) {
@@ -486,12 +582,15 @@ namespace MAINT
 				});
 				if (hasDifferentSource != effSet.end()) {
 					logger::debug("\t{} source mismatch! Found at least one: {} (0x{:08X})", mSpl->GetName(), (*hasDifferentSource)->spell->GetName(), (*hasDifferentSource)->spell->GetFormID());
+					//RE::DebugNotification(std::format("\t{} source mismatch! Found at least one: {} (0x{:08X})", mSpl->GetName(), (*hasDifferentSource)->spell->GetName(), (*hasDifferentSource)->spell->GetFormID()).c_str());
 					toRemove.emplace_back(std::make_pair(baseSpell, std::make_pair(maintSpell, debuffSpell)));
 					continue;
 				} else {
 					logger::debug("\tAll active sources match");
+					//RE::DebugNotification("\t\tAll active sources match");
 					if (uniqueList.size() > effSet.size()) {
 						logger::debug("\tBut exclusives are missing");
+						//RE::DebugNotification("\tBut exclusives are missing");
 						toRemove.emplace_back(std::make_pair(baseSpell, std::make_pair(maintSpell, debuffSpell)));
 						continue;
 					}
@@ -503,6 +602,7 @@ namespace MAINT
 				});
 				if (hasWrongDuration != effSet.end()) {
 					logger::debug("EFF duration does not match");
+					//RE::DebugNotification("EFF duration does not match");
 					toRemove.emplace_back(std::make_pair(baseSpell, std::make_pair(maintSpell, debuffSpell)));
 					continue;
 				}
@@ -514,6 +614,7 @@ namespace MAINT
 			});
 			if (hasActives == allMyEffects.end()) {
 				logger::debug("{} active count is zero", maintSpell->GetName());
+				//RE::DebugNotification(std::format("{} active count is zero", maintSpell->GetName()).c_str());
 				toRemove.emplace_back(std::make_pair(baseSpell, std::make_pair(maintSpell, debuffSpell)));
 			}
 		}
@@ -522,11 +623,14 @@ namespace MAINT
 			for (const auto& [baseSpell, maintSpellPair] : toRemove) {
 				const auto& [maintSpell, debuffSpell] = maintSpellPair;
 				logger::info("Dispelling missing/invalid {} (0x{:08X})", maintSpell->GetName(), maintSpell->GetFormID());
-
-				theActor->RemoveSpell(maintSpell);
-				theActor->RemoveSpell(debuffSpell);
-				RE::DebugNotification(std::format("{} is no longer being maintained.", baseSpell->GetName()).c_str());
-
+				if (maintSpell->effects[0]->baseEffect->HasArchetype(RE::EffectSetting::Archetype::kBoundWeapon) && !MAINT::CACHE::DeferredDispelList.contains({ maintSpell, baseSpell })) {
+					MAINT::CACHE::DeferredDispelList.emplace(maintSpell, baseSpell);
+				}
+				if (theActor->HasSpell(debuffSpell)) {
+					theActor->RemoveSpell(maintSpell);
+					theActor->RemoveSpell(debuffSpell);
+					RE::DebugNotification(std::format("{} is no longer being maintained.", baseSpell->GetName()).c_str());
+				}
 				MAINT::CACHE::SpellToMaintainedSpell.eraseKey(baseSpell);
 			}
 			MAINT::FORMS::GetSingleton().FlstMaintainedSpellToggle->ClearData();
@@ -603,7 +707,7 @@ static void ReadConfiguration()
 	if (auto const& it = logMap.find(confLogLevel); it != logMap.end())
 		spdlog::set_level(it->second);
 	else
-		spdlog::set_level(spdlog::level::level_enum::off);
+		spdlog::set_level(spdlog::level::level_enum::debug);
 
 	if (!ini->HasKey("CONFIG", "SilencePersistentSpellFX")) {
 		ini->SetBoolValue("CONFIG", "SilencePersistentSpellFX", false, "# If true, will disable persistent spell visuals on maintained spells. This includes flesh spell FX, the aura of Cloak spells, pretty much everything else.");
@@ -616,6 +720,12 @@ static void ReadConfiguration()
 	}
 	MAINT::CONFIG::CostBaseDuration = ini->GetLongValue("CONFIG", "CostNeutralDuration");
 	logger::info("CostNeutralDuration is {}", MAINT::CONFIG::CostBaseDuration);
+
+	if (!ini->HasKey("CONFIG", "AllowBoundWeapons")) {
+		ini->SetBoolValue("CONFIG", "AllowBoundWeapons", true, "# Whether to allow maintained bound weapons (glitchy; only works with proper bound weapon spells, not scripted ones for bound shields or armor)");
+	}
+	MAINT::CONFIG::AllowBoundWeapons = ini->GetBoolValue("CONFIG", "AllowBoundWeapons");
+	logger::info("AllowBoundWeapons is {}", MAINT::CONFIG::AllowBoundWeapons);
 
 	if (!ini->HasKey("CONFIG", "CostReductionExponent")) {
 		ini->SetDoubleValue("CONFIG", "CostReductionExponent", 0.0, "# Determines the impact of long durations on maintenance cost.\n# If this is set to 2.0 and a spell would last twice as long as CostNeutralDuration, its upkeep cost would be 1/4th compared to leaving this at 0.0\n# 1.0 would halve the cost. -1.0 would double it instead.\n# 0.0 = Disabled");
