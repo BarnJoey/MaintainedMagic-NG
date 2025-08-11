@@ -17,6 +17,20 @@ namespace MAINT
 	inline constexpr std::uint32_t SLOT_RIGHT_HAND = 0x13F42;  // Right Hand
 	inline constexpr std::uint32_t SLOT_LEFT_HAND = 0x13F43;   // Left Hand
 
+	
+	inline const RE::TESRace* WerewolfBeastRace()
+	{
+		static const auto* r = RE::TESForm::LookupByID<RE::TESRace>(0x000CDD84);  // Skyrim.esm
+		return r;
+	}
+	inline const RE::TESRace* VampireBeastRace()
+	{
+		// Dawnguard’s Vampire Lord race (load-order high byte varies). Replace 0x02 with your DG index if you hardcode,
+		// or just look it up by EDID if you have a helper.
+		static const auto* r = RE::TESForm::LookupByID<RE::TESRace>(0x0200283A);  // DLC1VampireBeastRace
+		return r;
+	}
+
 	void ForceMaintainedSpellUpdate(RE::Actor* const&);
 	void AwardPlayerExperience(RE::PlayerCharacter* const& player);
 	void CheckUpkeepValidity(RE::Actor* const&);

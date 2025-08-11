@@ -463,16 +463,23 @@ namespace MAINT
 		}
 	}
 
+	
+
 	void CheckUpkeepValidity(RE::Actor* const& theActor)
 	{
 		if (MAINT::CACHE::SpellToMaintainedSpell.empty())
 			return;
 
-		logger::debug("Triggered Mind Crush");
-
 		const float av = theActor->AsActorValueOwner()->GetActorValue(RE::ActorValue::kMagicka);
 		if (av >= 0)
 			return;
+
+		static const auto mindCrush = MAINT::FORMS::GetSingleton().SpelMindCrush;
+
+		if (theActor->GetRace() == WerewolfBeastRace() || theActor->GetRace() == VampireBeastRace() || theActor->AsMagicTarget()->HasMagicEffect(mindCrush->effects[0]->baseEffect))
+			return;
+
+		logger::debug("Triggered Mind Crush");
 
 		const auto& map = MAINT::CACHE::SpellToMaintainedSpell.GetForwardMap();
 		const float totalMagDrain = std::accumulate(map.begin(), map.end(), 0.0f,
@@ -488,7 +495,6 @@ namespace MAINT
 			}
 		}
 
-		const auto mindCrush = MAINT::FORMS::GetSingleton().SpelMindCrush;
 		theActor->GetMagicCaster(RE::MagicSystem::CastingSource::kLeftHand)
 			->CastSpellImmediate(mindCrush, false, theActor, 1.0, true, totalMagDrain, nullptr);
 	}
@@ -798,10 +804,9 @@ static void ReadConfiguration()
 
 	if (!ini->HasKey("CONFIG", "CostReductionExponent")) {
 		ini->SetDoubleValue("CONFIG", "CostReductionExponent", 0.0,
-			"# Determines the impact of long durations on maintenance cost.\n"
-			"# If this is set to 2.0 and a spell would last twice as long as CostNeutralDuration, its upkeep cost would be 1/4th compared to leaving this at 0.0\n"
-			"# 1.0 would halve the cost. -1.0 would double it instead.\n"
-			"# 0.0 = Disabled");
+			"# Determines the impact of spell durations on their maintenance cost.\n"
+			"# Basically, final cost will be = (CostNeutralDuration / Spell Duration)^CostReductionExponent\n"
+			"# Leave at 0.0 to just use basic scaling (see CostNeutralDuration)");
 	}
 	MAINT::CONFIG::CostReductionExponent = static_cast<float>(ini->GetDoubleValue("CONFIG", "CostReductionExponent"));
 	spdlog::info("CostReductionExponent is {}", MAINT::CONFIG::CostReductionExponent);
