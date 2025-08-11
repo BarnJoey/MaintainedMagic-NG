@@ -160,7 +160,13 @@ namespace MAINT
 		static auto const& spellFactory = RE::IFormFactory::GetConcreteFormFactoryByType<RE::SpellItem>();
 		const auto* file = theSpell->GetFile(0);
 		const auto& fileString = file ? file->GetFilename() : "VIRTUAL";
-		spdlog::info("Maintainify({}, 0x{:08X}~{})", theSpell->GetName(), theSpell->GetLocalFormID(), fileString);
+		
+		spdlog::info("Maintainify({})", theSpell->GetName());
+		spdlog::info(" - FID {:08X}", file ? theSpell->GetLocalFormID() : theSpell->GetFormID());
+		spdlog::info(" - File {}", fileString);
+
+		//spdlog::info("Maintainify({}, 0x{:08X}~{})", theSpell->GetName(), theSpell->GetLocalFormID(), fileString);
+
 
 		auto* infiniteSpell = spellFactory->Create();
 		infiniteSpell->SetFormID(MAINT::FORMS::GetSingleton().NextFormID(), false);
@@ -204,7 +210,7 @@ namespace MAINT
 
 		const auto* file = theSpell->GetFile(0);
 		const auto& fileString = file ? file->GetFilename() : "VIRTUAL";
-		spdlog::info("Debuffify({}, 0x{:08X}~{})", theSpell->GetName(), theSpell->GetLocalFormID(), fileString);
+		spdlog::info("Debuffify({}, 0x{:08X}~{})", theSpell->GetName(), file ? theSpell->GetLocalFormID() : theSpell->GetFormID(), fileString);
 
 		auto* debuffSpell = spellFactory->Create();
 		debuffSpell->SetFormID(MAINT::FORMS::GetSingleton().NextFormID(), false);
@@ -269,74 +275,6 @@ namespace MAINT
 		}
 		MAINT::FORMS::GetSingleton().FlstMaintainedSpellToggle->ClearData();
 		MAINT::CACHE::SpellToMaintainedSpell.clear();
-	}
-
-	static void LoadSavegameMapping(const std::string& identifier)
-	{
-		spdlog::info("LoadSavegameMapping({})", identifier);
-
-		constexpr auto getPluginNameWithLocalID = [](const std::string& part) -> std::pair<std::string, RE::FormID> {
-			const std::size_t tildePos = part.find("~");
-			if (tildePos == std::string::npos)
-				return { std::string(), 0x0 };
-
-			std::string pluginName = part.substr(0, tildePos);
-			auto localFormID = lexical_cast_hex_to_formid(part.substr(tildePos + 1));
-			return { pluginName, localFormID };
-		};
-		constexpr auto getSpellIDWithDebuffID = [](const std::string& part) -> std::pair<RE::FormID, RE::FormID> {
-			const std::size_t tildePos = part.find("~");
-			if (tildePos == std::string::npos)
-				return { 0x0, 0x0 };
-			try {
-				auto spellFormID = lexical_cast_hex_to_formid(part.substr(0, tildePos));
-				auto debuffFormID = lexical_cast_hex_to_formid(part.substr(tildePos + 1));
-				return { spellFormID, debuffFormID };
-			} catch (...) {
-				return { 0x0, 0x0 };
-			}
-		};
-
-		const auto& dataHandler = RE::TESDataHandler::GetSingleton();
-		if (!dataHandler) {
-			spdlog::error("\tFailed to fetch TESDataHandler!");
-			return;
-		}
-
-		const auto* spellFactory = RE::IFormFactory::GetConcreteFormFactoryByType<RE::SpellItem>();
-		if (!spellFactory) {
-			spdlog::error("\tFailed to fetch IFormFactory: SPEL!");
-			return;
-		}
-
-		const auto subSection = std::format("MAP:{}", identifier);
-		const auto* ini = MAINT::CONFIG::ConfigBase::GetSingleton(MAINT::CONFIG::MAP_FILE);
-		for (const auto& [k, v] : ini->GetAllKeyValuePairs(subSection)) {
-			const auto& [plugin, formid] = getPluginNameWithLocalID(k);
-			const auto& [maintSpellFormID, debuffSpellFormID] = getSpellIDWithDebuffID(v);
-
-			const auto& baseSpell = dataHandler->LookupForm<RE::SpellItem>(formid, plugin);
-			if (!baseSpell)
-				continue;
-
-			const auto& infSpell = CreateMaintainSpell(const_cast<RE::SpellItem*>(baseSpell));
-			if (!infSpell) {
-				spdlog::error("\tFailed to create Maintained Spell: {}", baseSpell->GetName());
-				return;
-			}
-			if (maintSpellFormID != 0x0)
-				infSpell->SetFormID(maintSpellFormID, false);
-
-			const auto& debuffSpell = CreateDebuffSpell(const_cast<RE::SpellItem*>(baseSpell), 0.0f);
-			if (!debuffSpell) {
-				spdlog::error("\tFailed to create Maintained Spell: {}", baseSpell->GetName());
-				return;
-			}
-			if (debuffSpellFormID != 0x0)
-				debuffSpell->SetFormID(debuffSpellFormID, false);
-
-			MAINT::CACHE::SpellToMaintainedSpell.insert(const_cast<RE::SpellItem*>(baseSpell), { const_cast<RE::SpellItem*>(infSpell), const_cast<RE::SpellItem*>(debuffSpell) });
-		}
 	}
 
 	static float CalculateUpkeepCost(RE::SpellItem* const& baseSpell, RE::Actor* const& theCaster)
@@ -432,6 +370,77 @@ namespace MAINT
 		RE::DebugNotification(std::format("Maintaining {} for {} Magicka.", baseSpell->GetName(), static_cast<uint32_t>(magCost)).c_str());
 	}
 
+	static void LoadSavegameMapping(const std::string& identifier)
+	{
+		spdlog::info("LoadSavegameMapping({})", identifier);
+
+		constexpr auto getPluginNameWithLocalID = [](const std::string& part) -> std::pair<std::string, RE::FormID> {
+			const std::size_t tildePos = part.find("~");
+			if (tildePos == std::string::npos)
+				return { std::string(), 0x0 };
+
+			std::string pluginName = part.substr(0, tildePos);
+			auto localFormID = lexical_cast_hex_to_formid(part.substr(tildePos + 1));
+			return { pluginName, localFormID };
+		};
+		constexpr auto getSpellIDWithDebuffID = [](const std::string& part) -> std::pair<RE::FormID, RE::FormID> {
+			const std::size_t tildePos = part.find("~");
+			if (tildePos == std::string::npos)
+				return { 0x0, 0x0 };
+			try {
+				auto spellFormID = lexical_cast_hex_to_formid(part.substr(0, tildePos));
+				auto debuffFormID = lexical_cast_hex_to_formid(part.substr(tildePos + 1));
+				return { spellFormID, debuffFormID };
+			} catch (...) {
+				return { 0x0, 0x0 };
+			}
+		};
+
+		const auto& dataHandler = RE::TESDataHandler::GetSingleton();
+		if (!dataHandler) {
+			spdlog::error("\tFailed to fetch TESDataHandler!");
+			return;
+		}
+
+		const auto* spellFactory = RE::IFormFactory::GetConcreteFormFactoryByType<RE::SpellItem>();
+		if (!spellFactory) {
+			spdlog::error("\tFailed to fetch IFormFactory: SPEL!");
+			return;
+		}
+
+		const auto subSection = std::format("MAP:{}", identifier);
+		const auto* ini = MAINT::CONFIG::ConfigBase::GetSingleton(MAINT::CONFIG::MAP_FILE);
+		for (const auto& [k, v] : ini->GetAllKeyValuePairs(subSection)) {
+			const auto& [plugin, formid] = getPluginNameWithLocalID(k);
+			const auto& [maintSpellFormID, debuffSpellFormID] = getSpellIDWithDebuffID(v);
+
+			const auto& baseSpell = plugin != "VIRTUAL" ? dataHandler->LookupForm<RE::SpellItem>(formid, plugin) : RE::TESForm::LookupByID<RE::SpellItem>(formid);
+			if (!baseSpell)
+			{
+				spdlog::error("Base Spell {}~{:08X} not found", plugin, formid);
+				continue;
+			}
+
+			const auto& infSpell = CreateMaintainSpell(const_cast<RE::SpellItem*>(baseSpell));
+			if (!infSpell) {
+				spdlog::error("\tFailed to create Maintained Spell: {}", baseSpell->GetName());
+				return;
+			}
+			if (maintSpellFormID != 0x0)
+				infSpell->SetFormID(maintSpellFormID, false);
+
+			const auto& debuffSpell = CreateDebuffSpell(const_cast<RE::SpellItem*>(baseSpell), 0.0f);
+			if (!debuffSpell) {
+				spdlog::error("\tFailed to create Maintained Spell: {}", baseSpell->GetName());
+				return;
+			}
+			if (debuffSpellFormID != 0x0)
+				debuffSpell->SetFormID(debuffSpellFormID, false);
+
+			MAINT::CACHE::SpellToMaintainedSpell.insert(const_cast<RE::SpellItem*>(baseSpell), { const_cast<RE::SpellItem*>(infSpell), const_cast<RE::SpellItem*>(debuffSpell) });
+		}
+	}
+
 	static void StoreSavegameMapping(const std::string& identifier)
 	{
 		spdlog::info("StoreSavegameMapping({})", identifier);
@@ -445,7 +454,7 @@ namespace MAINT
 
 			const auto* file = baseSpell->GetFile(0);
 			const auto fileName = file ? file->GetFilename() : "VIRTUAL"sv;
-			const auto keyString = std::format("{}~0x{:08X}", fileName, baseSpell->GetLocalFormID());
+			const auto keyString = std::format("{}~0x{:08X}", fileName, file ? baseSpell->GetLocalFormID() : baseSpell->GetFormID());
 			const auto rhs = std::format("0x{:08X}~0x{:08X}", maintSpell->GetFormID(), debuffSpell->GetFormID());
 
 			ini->SetValue(subSection, keyString, rhs, std::format("# {}", baseSpell->GetName()));
@@ -462,8 +471,6 @@ namespace MAINT
 			player->AddSkillExperience(baseSpell->GetAssociatedSkill(), baseCost * MAINT::CONFIG::MaintainedExpMultiplier);
 		}
 	}
-
-	
 
 	void CheckUpkeepValidity(RE::Actor* const& theActor)
 	{
@@ -618,10 +625,11 @@ namespace MAINT
 
 			// Count mismatch checks
 			if (mSpl->effects.size() < effSet.size()) {
-				spdlog::debug("{} EFF count mismatch: Spell has LESS", mSpl->GetName());
+				spdlog::trace("{} EFF count mismatch: Spell has LESS", mSpl->GetName());
 				toRemove.emplace_back(baseSpell, std::make_pair(maintSpell, debuffSpell));
 				continue;
 			} else if (mSpl->effects.size() > effSet.size()) {
+				spdlog::trace("{} EFF count mismatch: Spell has MORE", mSpl->GetName());
 				// If more effects on spell definition than present on actor, ensure exclusives and sources match
 				const auto getUniques = [](const RE::BSTArray<RE::Effect*>& arr) {
 					std::set<RE::TESForm*> uniq;
@@ -634,8 +642,6 @@ namespace MAINT
 					}
 					return out;
 				};
-
-				spdlog::debug("{} EFF count mismatch: Spell has MORE", mSpl->GetName());
 
 				const auto uniqueList = getUniques(mSpl->effects);
 

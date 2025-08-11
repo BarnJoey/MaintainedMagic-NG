@@ -27,6 +27,10 @@
 
 #include <spdlog/sinks/basic_file_sink.h>  // file sink (used in Debug & Release)
 #include <spdlog/sinks/msvc_sink.h>        // VS Output (Debug-only mirror)
+
+#ifndef SPDLOG_ACTIVE_LEVEL
+#	define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_TRACE  // or _DEBUG ? SPDLOG_LEVEL_TRACE : SPDLOG_LEVEL_INFO
+#endif
 #include <spdlog/spdlog.h>
 
 using namespace std::literals;
@@ -123,10 +127,45 @@ namespace
 
 inline void InitializeLog()
 {
-	auto loggerPtr = MakeUnifiedLogger();
-	spdlog::set_default_logger(std::move(loggerPtr));
-	spdlog::info("Logging initialized for {}", Plugin::NAME);
+	auto dir = SKSE::log::log_directory();
+	if (!dir) {
+		SKSE::stl::report_and_fail("Failed to find standard logging directory");
+	}
+	*dir /= std::format("{}.log", Plugin::NAME);
+
+	// Create sinks
+	auto fileSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(dir->string(), /*truncate=*/true);
+#ifndef NDEBUG
+	auto msvcSink = std::make_shared<spdlog::sinks::msvc_sink_mt>();
+#endif
+
+	// Allow everything through sinks; runtime logger level will gate what actually prints
+	fileSink->set_level(spdlog::level::trace);
+#ifndef NDEBUG
+	msvcSink->set_level(spdlog::level::trace);
+#endif
+
+	std::vector<spdlog::sink_ptr> sinks;
+	sinks.emplace_back(fileSink);
+#ifndef NDEBUG
+	sinks.emplace_back(msvcSink);
+#endif
+
+	auto logger = std::make_shared<spdlog::logger>("global log", sinks.begin(), sinks.end());
+	spdlog::set_default_logger(logger);
+
+	// Set a permissive default; your ReadConfiguration can tighten this later
+#ifdef NDEBUG
+	spdlog::set_level(spdlog::level::info);
+#else
+	spdlog::set_level(spdlog::level::trace);
+#endif
+	spdlog::default_logger()->flush_on(spdlog::level::info);
+	spdlog::set_pattern("%v");
+
+	spdlog::info("Logging to {}", dir->string());
 }
+
 
 extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_skse)
 {
