@@ -14,17 +14,20 @@
 #	include "SKSE/SKSE.h"
 #	include <xbyak/xbyak.h>
 #endif
-
-#ifdef NDEBUG
-#	include <spdlog/sinks/basic_file_sink.h>
-#else
-#	include <spdlog/sinks/msvc_sink.h>
-#endif
-
 #pragma warning(pop)
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+
+#include <format>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <spdlog/sinks/basic_file_sink.h>  // file sink (used in Debug & Release)
+#include <spdlog/sinks/msvc_sink.h>        // VS Output (Debug-only mirror)
+#include <spdlog/spdlog.h>
 
 using namespace std::literals;
 
@@ -75,35 +78,54 @@ namespace util
 
 #include "Plugin.h"
 
+// Forward decls provided by your sources
 bool Load();
 void OnInit(SKSE::MessagingInterface::Message* const a_msg);
 
-void InitializeLog()
+namespace
 {
+	inline std::shared_ptr<spdlog::logger> MakeUnifiedLogger()
+	{
+		// Resolve the canonical SKSE logging folder (works across SE/AE/VR)
+		auto path = logger::log_directory();
+		if (!path) {
+			util::report_and_fail("Failed to find standard logging directory"sv);
+		}
+
+		*path /= std::format("{}.log", Plugin::NAME);  // keep the same filename convention
+
+		// Always write to file in both Debug and Release
+		auto fileSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path->string(), /*truncate=*/true);
+
+		std::vector<spdlog::sink_ptr> sinks;
+		sinks.emplace_back(fileSink);
+
 #ifndef NDEBUG
-	auto sink = std::make_shared<spdlog::sinks::msvc_sink_mt>();
+		// Mirror logs to the VS Output window in Debug
+		sinks.emplace_back(std::make_shared<spdlog::sinks::msvc_sink_mt>());
+#endif
+
+		auto loggerPtr = std::make_shared<spdlog::logger>("global log"s, sinks.begin(), sinks.end());
+
+#ifndef NDEBUG
+		const auto level = spdlog::level::trace;
 #else
-	auto path = logger::log_directory();
-	if (!path) {
-		util::report_and_fail("Failed to find standard logging directory"sv);
+		const auto level = spdlog::level::info;
+#endif
+
+		loggerPtr->set_level(level);
+		loggerPtr->flush_on(spdlog::level::info);
+		loggerPtr->set_pattern("%v"s);  // match your old pattern
+
+		return loggerPtr;
 	}
+}
 
-	*path /= std::format("{}.log"sv, Plugin::NAME);
-	auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path->string(), true);
-#endif
-
-#ifndef NDEBUG
-	const auto level = spdlog::level::trace;
-#else
-	const auto level = spdlog::level::info;
-#endif
-
-	auto log = std::make_shared<spdlog::logger>("global log"s, std::move(sink));
-	log->set_level(level);
-	log->flush_on(spdlog::level::info);
-
-	spdlog::set_default_logger(std::move(log));
-	spdlog::set_pattern("%v"s);
+inline void InitializeLog()
+{
+	auto loggerPtr = MakeUnifiedLogger();
+	spdlog::set_default_logger(std::move(loggerPtr));
+	spdlog::info("Logging initialized for {}", Plugin::NAME);
 }
 
 extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_skse)
@@ -111,12 +133,13 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 #ifndef NDEBUG
 	while (!WinAPI::IsDebuggerPresent()) {};
 #endif
+
 	InitializeLog();
 	logger::info("Loaded plugin");
 	SKSE::Init(a_skse);
-	
+
 	SKSE::GetMessagingInterface()->RegisterListener(OnInit);
-	
+
 	return Load();
 }
 

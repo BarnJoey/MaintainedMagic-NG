@@ -2,21 +2,37 @@
 
 #include "Bimap.h"
 #include <SimpleIni.h>
+#include <atomic>
+#include <map>
+#include <mutex>
+#include <queue>
+#include <set>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <utility>
 
 namespace MAINT
 {
+	inline constexpr std::uint32_t SLOT_RIGHT_HAND = 0x13F42;  // Right Hand
+	inline constexpr std::uint32_t SLOT_LEFT_HAND = 0x13F43;   // Left Hand
+
 	void ForceMaintainedSpellUpdate(RE::Actor* const&);
 	void AwardPlayerExperience(RE::PlayerCharacter* const& player);
 	void CheckUpkeepValidity(RE::Actor* const&);
 
 	const auto lexical_cast_hex_to_formid(const std::string& hex_string)
 	{
-		if (hex_string.substr(0, 2) != "0x") {
-			throw std::invalid_argument("Input string is not a valid hexadecimal format (should start with '0x').");
+		// Accepts strings like "0x1234ABCD" or "1234ABCD" and throws on invalid input
+		std::string s = hex_string;
+		if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0) {
+			s = s.substr(2);
 		}
-
-		std::istringstream iss(hex_string.substr(2));
-		uint32_t result;
+		if (s.empty()) {
+			throw std::invalid_argument("Empty hex string");
+		}
+		std::istringstream iss(s);
+		uint32_t result{};
 		if (!(iss >> std::hex >> result)) {
 			throw std::invalid_argument("Failed to convert hexadecimal string to integer.");
 		}
@@ -33,43 +49,51 @@ namespace MAINT
 	public:
 		void push(const Data& data)
 		{
-			std::lock_guard<std::mutex> guard(theMutex);
+			std::lock_guard<std::mutex> lock(theMutex);
 			theQueue.push(data);
 		}
-
-		bool empty() const
+		[[nodiscard]] bool empty() const noexcept
 		{
-			std::lock_guard<std::mutex> guard(theMutex);
+			std::lock_guard<std::mutex> lock(theMutex);
 			return theQueue.empty();
 		}
-
 		Data& front()
 		{
-			std::lock_guard<std::mutex> guard(theMutex);
+			std::lock_guard<std::mutex> lock(theMutex);
 			return theQueue.front();
 		}
-
-		Data const& front() const
+		const Data& front() const
 		{
-			std::lock_guard<std::mutex> guard(theMutex);
+			std::lock_guard<std::mutex> lock(theMutex);
 			return theQueue.front();
 		}
-
 		void pop()
 		{
-			std::lock_guard<std::mutex> guard(theMutex);
+			std::lock_guard<std::mutex> lock(theMutex);
 			theQueue.pop();
+		}
+		// Optional, non-breaking helper
+		bool try_pop(Data& out)
+		{
+			std::lock_guard<std::mutex> lock(theMutex);
+			if (theQueue.empty())
+				return false;
+			out = std::move(theQueue.front());
+			theQueue.pop();
+			return true;
 		}
 	};
 
 	namespace CONFIG
 	{
-		std::string const& MAP_FILE		= "Data/SKSE/Plugins/MaintainedMagicNG.ini";
-		std::string const& CONFIG_FILE	= "Data/SKSE/Plugins/MaintainedMagicNG.Config.ini";
-		inline bool DoSilenceFX;
-		inline long CostBaseDuration;
-		inline float CostReductionExponent; 
-		inline bool AllowBoundWeapons;
+		inline constexpr const char* MAP_FILE = "Data/SKSE/Plugins/MaintainedMagicNG.ini";
+		inline constexpr const char* CONFIG_FILE = "Data/SKSE/Plugins/MaintainedMagicNG.Config.ini";
+		inline bool DoSilenceFX = false;
+		inline long CostBaseDuration = 60;          // seconds
+		inline float CostReductionExponent = 0.0f;  // disabled by default
+		inline bool AllowBoundWeapons = true;
+		inline float MaintainedExpMultiplier = 1.0;
+
 		class ConfigBase
 		{
 		private:
@@ -181,9 +205,9 @@ namespace MAINT
 
 	namespace CACHE
 	{
-		typedef RE::SpellItem InfiniteSpell;
-		typedef RE::SpellItem DebuffSpell;
-		typedef std::pair<InfiniteSpell*, DebuffSpell*> MaintainedSpell;
+		using InfiniteSpell = RE::SpellItem;
+		using DebuffSpell = RE::SpellItem;
+		using MaintainedSpell = std::pair<InfiniteSpell*, DebuffSpell*>;
 
 		inline BiMap<RE::SpellItem*, MaintainedSpell> SpellToMaintainedSpell;
 		inline std::set<std::pair<RE::SpellItem*, RE::SpellItem*>> DeferredDispelList;
