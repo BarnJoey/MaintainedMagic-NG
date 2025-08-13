@@ -289,8 +289,8 @@ namespace MAINT
 			return baseCost;
 
 		const auto& firstEff = baseSpell->effects.front();
-		const uint32_t baseDurI = std::max<uint32_t>(1u, firstEff->GetDuration());
-		float mult = baseDurI < NEUTRAL_DURATION ? std::pow(NEUTRAL_DURATION / baseDurI, 2.0f) : std::pow(std::sqrt(NEUTRAL_DURATION / baseDurI), EXPONENT);
+		const uint32_t effectiveDuration = std::max<uint32_t>(1u, firstEff->GetDuration());
+		float mult = effectiveDuration < NEUTRAL_DURATION ? std::pow(NEUTRAL_DURATION / effectiveDuration, 2.0f) : std::sqrt(NEUTRAL_DURATION / effectiveDuration);
 
 		const float baseDur = static_cast<float>(firstEff->GetDuration());
 		float finalDur = baseDur;
@@ -811,7 +811,7 @@ static void ReadConfiguration()
 	if (!ini->HasKey("CONFIG", "CostReductionExponent")) {
 		ini->SetDoubleValue("CONFIG", "CostReductionExponent", 0.0,
 			"# Determines the impact of spell durations on their maintenance cost.\n"
-			"# Basically, final cost will be = (CostNeutralDuration / Spell Duration)^CostReductionExponent\n"
+			"# Basically, final cost will be multiplied by (CostNeutralDuration / Effective Spell Duration)^CostReductionExponent\n"
 			"# Leave at 0.0 to just use basic scaling (see CostNeutralDuration)");
 	}
 	MAINT::CONFIG::CostReductionExponent = static_cast<float>(ini->GetDoubleValue("CONFIG", "CostReductionExponent"));
