@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Bimap.h"
+#include "Bimap.hpp"
 #include <SimpleIni.h>
 #include <atomic>
 #include <map>

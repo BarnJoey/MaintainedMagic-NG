@@ -18,6 +18,8 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+#undef min
+#undef max
 
 #include <format>
 #include <memory>

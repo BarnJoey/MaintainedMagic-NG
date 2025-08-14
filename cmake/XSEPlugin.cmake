@@ -52,7 +52,7 @@ target_sources(
 target_precompile_headers(
 	"${PROJECT_NAME}"
 	PRIVATE
-		include/PCH.h
+		include/PCH.hpp
 )
 
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
