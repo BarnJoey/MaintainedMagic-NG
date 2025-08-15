@@ -131,6 +131,7 @@ namespace Maint
 		KywdExcludeFromSystem = RE::TESDataHandler::GetSingleton()->LookupForm<RE::BGSKeyword>(0x80A, "MaintainedMagic.esp"sv);
 		SpelMagickaDebuffTemplate = RE::TESDataHandler::GetSingleton()->LookupForm<RE::SpellItem>(0x802, "MaintainedMagic.esp"sv);
 		GlobMaintainModeEnabled = RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESGlobal>(0x805, "MaintainedMagic.esp"sv);
+		GlobCleanupRequested = RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESGlobal>(0x80F, "MaintainedMagic.esp"sv);
 		FlstMaintainedSpellToggle = RE::TESDataHandler::GetSingleton()->LookupForm<RE::BGSListForm>(0x80B, "MaintainedMagic.esp"sv);
 		SpelMindCrush = RE::TESDataHandler::GetSingleton()->LookupForm<RE::SpellItem>(0x80D, "MaintainedMagic.esp"sv);
 	}
@@ -193,7 +194,7 @@ namespace Maint
 		map_.clear();
 		deferred_.clear();
 	}
-	bool MaintainedRegistry::empty() const { return map_.empty(); }
+	bool MaintainedRegistry::empty() const { return map_.empty() && deferred_.empty(); }
 
 	bool MaintainedRegistry::hasBase(RE::SpellItem* base) const { return map_.containsKey(base); }
 
@@ -647,6 +648,11 @@ namespace Maint
 		std::vector<std::pair<RE::SpellItem*, Domain::MaintainedPair>> toRemove;
 
 		for (const auto& [base, pair] : MaintainedRegistry::Get().map()) {
+			if (FormsRepository::Get().GlobCleanupRequested->value != 0) {
+				spdlog::debug("Dispelled by player: {}", base->GetName());
+				toRemove.emplace_back(base, pair);
+				continue;
+			}
 			auto* m = pair.infinite;
 			auto* d = pair.debuff;
 
@@ -776,6 +782,7 @@ namespace Maint
 			FormsRepository::Get().FlstMaintainedSpellToggle->ClearData();
 			for (const auto& [spl, _] : MaintainedRegistry::Get().map())
 				FormsRepository::Get().FlstMaintainedSpellToggle->AddForm(spl);
+			FormsRepository::Get().GlobCleanupRequested->value = 0;
 		}
 
 		const auto end = std::chrono::high_resolution_clock::now();

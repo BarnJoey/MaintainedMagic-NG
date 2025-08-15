@@ -169,6 +169,7 @@ namespace Maint
 		RE::BGSKeyword* KywdExcludeFromSystem{};
 		RE::SpellItem* SpelMagickaDebuffTemplate{};
 		RE::TESGlobal* GlobMaintainModeEnabled{};
+		RE::TESGlobal* GlobCleanupRequested{};
 		RE::BGSListForm* FlstMaintainedSpellToggle{};
 		RE::SpellItem* SpelMindCrush{};
 
