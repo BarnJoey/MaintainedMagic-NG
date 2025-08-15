@@ -347,14 +347,12 @@ namespace Maint
 				const bool isBaseSpell = MaintainedRegistry::Get().hasBase(asSpl);
 
 				if (isBaseSpell) {
-					const auto pair = MaintainedRegistry::Get().getByBase(asSpl).value();
+					const auto& pair = MaintainedRegistry::Get().getByBase(asSpl).value();
 					auto* mSpl = pair.infinite;
 					cache_[mSpl].push_back(e);
-					++lastCount_;
 				} else if (hasKywd) {
 					e->elapsedSeconds = 0.0f;
 					cache_[asSpl].push_back(e);
-					++lastCount_;
 				}
 			}
 		}
@@ -362,7 +360,7 @@ namespace Maint
 	const std::unordered_map<RE::SpellItem*, std::vector<RE::ActiveEffect*>>&
 		MaintainedEffectsCache::GetFor(RE::Actor* actor)
 	{
-		auto count = std::ranges::distance(actor->AsMagicTarget()->GetActiveEffectList()->begin(),
+		const auto count = std::ranges::distance(actor->AsMagicTarget()->GetActiveEffectList()->begin(),
 			actor->AsMagicTarget()->GetActiveEffectList()->end());
 		if (count != lastCount_) {
 			rebuild(actor);
@@ -628,6 +626,8 @@ namespace Maint
 		static uint32_t cnt{ 0 };
 		const auto start = std::chrono::high_resolution_clock::now();
 
+		static MaintainedEffectsCache cache;
+
 		// Apply deferred dispels (bound weapon hand state)
 		MaintainedRegistry::Get().forEachDeferred([&](RE::SpellItem* maintained, RE::SpellItem* base, bool& erase) {
 			auto* eq = RE::ActorEquipManager::GetSingleton();
@@ -644,11 +644,7 @@ namespace Maint
 			}
 		});
 
-		static MaintainedEffectsCache cache;
-		const auto& spell2ae = cache.GetFor(actor);
-
 		std::vector<std::pair<RE::SpellItem*, Domain::MaintainedPair>> toRemove;
-		toRemove.reserve(MaintainedRegistry::Get().map().size());
 
 		for (const auto& [base, pair] : MaintainedRegistry::Get().map()) {
 			auto* m = pair.infinite;
@@ -677,7 +673,7 @@ namespace Maint
 
 				const auto* left = actor->GetEquippedObject(true);
 				if (left && left->IsWeapon()) {
-					const auto* weap = left->As<RE::TESObjectWEAP>();  // BUGFIX: use left not right
+					const auto* weap = left->As<RE::TESObjectWEAP>();
 					for (auto* eff : base->effects) {
 						if (weap->formID == eff->baseEffect->data.associatedForm->formID) {
 							found = true;
@@ -693,6 +689,7 @@ namespace Maint
 				}
 			}
 
+			const auto& spell2ae = cache.GetFor(actor);
 			const auto it = spell2ae.find(m);
 			if (it == spell2ae.end()) {
 				spdlog::debug("{} not found on Actor", m->GetName());
