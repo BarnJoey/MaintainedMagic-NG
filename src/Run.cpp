@@ -78,7 +78,7 @@ namespace Maint
 	{
 		return ini_.SectionExists(section.c_str());
 	}
-	std::vector<std::pair<std::string, std::string>>
+	const std::vector<std::pair<std::string, std::string>>
 		Config::ConfigBase::GetAllKeyValuePairs(const std::string& section) const
 	{
 		std::vector<std::pair<std::string, std::string>> out;
@@ -88,6 +88,10 @@ namespace Maint
 			out.emplace_back(k.pItem, ini_.GetValue(section.c_str(), k.pItem));
 		}
 		return out;
+	}
+	const void Config::ConfigBase::GetAllSections(std::list<CSimpleIniA::Entry>* const& out) const
+	{
+		ini_.GetAllSections(*out);
 	}
 	void Config::ConfigBase::DeleteSection(const std::string& section) { ini_.Delete(section.c_str(), nullptr, true); }
 	void Config::ConfigBase::DeleteKey(const std::string& section, const std::string& key) { ini_.Delete(section.c_str(), key.c_str()); }
@@ -774,6 +778,10 @@ namespace Maint
 				if (actor->HasSpell(d)) {
 					actor->RemoveSpell(m);
 					actor->RemoveSpell(d);
+					if (Config::InstantDispel) {
+						static auto handle = actor->GetHandle();
+						actor->AsMagicTarget()->DispelEffect(base, handle);
+					}
 					RE::DebugNotification(std::format("{} is no longer being maintained.", base->GetName()).c_str());
 				}
 				MaintainedRegistry::Get().eraseBase(base);
@@ -1024,6 +1032,13 @@ namespace Maint
 		Config::AllowBoundWeapons = ini->GetBoolValue("CONFIG", "AllowBoundWeapons");
 		spdlog::info("AllowBoundWeapons is {}", Config::AllowBoundWeapons);
 
+		if (!ini->HasKey("CONFIG", "InstantDispel")) {
+			ini->SetBoolValue("CONFIG", "InstantDispel", true,
+				"# When true, will instantly dispel a maintained spell's effects when it is recast rather than applying the standard spell with its normal duration.");
+		}
+		Config::InstantDispel = ini->GetBoolValue("CONFIG", "InstantDispel");
+		spdlog::info("InstantDispel is {}", Config::InstantDispel);
+
 		if (!ini->HasKey("CONFIG", "CostReductionExponent")) {
 			ini->SetDoubleValue("CONFIG", "CostReductionExponent", 0.0,
 				"# Determines the impact of spell durations on their maintenance cost.\n"
@@ -1041,6 +1056,49 @@ namespace Maint
 		Config::MaintainedExpMultiplier = static_cast<float>(ini->GetDoubleValue("CONFIG", "MaintainedExpMultiplier"));
 		spdlog::info("MaintainedExpMultiplier is {}", Config::MaintainedExpMultiplier);
 
+		if (!ini->HasKey("CONFIG", "CleanupMissingSaves")) {
+			ini->SetBoolValue("CONFIG", "CleanupMissingSaves", false,
+				"# If true, will clean up the internal database and remove data belonging to missing save files to prevent bloat.\n"
+				"# CAUTION: If the save-file is restored (recovered from a backup/recycle bin) after a database cleanup, that character may have reduced magicka and require manual fixing through the console!");
+		}
+		Config::CleanupMissingSaves = ini->GetBoolValue("CONFIG", "CleanupMissingSaves");
+		spdlog::info("CleanupMissingSaves is {}", Config::CleanupMissingSaves);
+
+		ini->Save();
+	}
+
+	static void DoDatabaseMaintenance(const std::string current)
+	{
+		if (!Config::CleanupMissingSaves)
+			return;
+		spdlog::info("DoDatabaseMaintenance()");
+
+		const auto& allLocalSaves = RE::BGSSaveLoadManager::GetSingleton()->saveGameList;
+
+		if (allLocalSaves.empty())
+			return;
+
+		const auto& ini = Config::ConfigBase::GetSingleton(Config::MAP_FILE);
+		std::list<CSimpleIniA::Entry> allMappings;
+		ini->GetAllSections(&allMappings);
+
+		if (allMappings.size() == allLocalSaves.size())
+			return;
+
+		for (const auto& mapEntry : allMappings) {
+			if (allLocalSaves.end() != std::find_if(allLocalSaves.begin(), allLocalSaves.end(),
+										   [&](const auto& saveFileName) {
+											   const auto mapString = std::format("MAP:{}.ess", saveFileName->fileName.c_str());
+											   return std::strcmp(mapEntry.pItem, mapString.c_str()) == 0;
+										   })) {
+				continue;
+			}
+
+			if (std::strcmp(mapEntry.pItem, current.c_str()) != 0) {
+				spdlog::info("DoDatabaseMaintenance() : Deleting missing mapping for {}", mapEntry.pItem);
+				ini->DeleteSection(mapEntry.pItem);
+			}
+		}
 		ini->Save();
 	}
 
@@ -1061,6 +1119,7 @@ namespace Maint
 				MaintenanceOrchestrator::PurgeAll();
 				FormsRepository::Get().LoadOffset(Config::ConfigBase::GetSingleton(Config::MAP_FILE), saveFile);
 				SaveMappingService::Load(saveFile);
+				DoDatabaseMaintenance(saveFile);
 			}
 			break;
 

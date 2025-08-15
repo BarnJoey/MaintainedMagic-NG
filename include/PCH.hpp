@@ -30,9 +30,8 @@
 #include <spdlog/sinks/basic_file_sink.h>  // file sink (used in Debug & Release)
 #include <spdlog/sinks/msvc_sink.h>        // VS Output (Debug-only mirror)
 
-#ifndef SPDLOG_ACTIVE_LEVEL
-#	define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_TRACE  // or _DEBUG ? SPDLOG_LEVEL_TRACE : SPDLOG_LEVEL_INFO
-#endif
+#define SPDLOG_ACTIVE_LEVEL _DEBUG ? SPDLOG_LEVEL_TRACE : SPDLOG_LEVEL_INFO
+
 #include <spdlog/spdlog.h>
 
 using namespace std::literals;

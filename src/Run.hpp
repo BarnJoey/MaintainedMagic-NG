@@ -80,6 +80,8 @@ namespace Maint
 		inline float CostReductionExponent = 0.0f;
 		inline bool AllowBoundWeapons = true;
 		inline float MaintainedExpMultiplier = 1.0f;
+		inline bool CleanupMissingSaves = false;
+		inline bool InstantDispel = true;
 
 		// Simple wrapper over SimpleIni with multi-instance cache by path.
 		class ConfigBase
@@ -99,7 +101,8 @@ namespace Maint
 			bool HasKey(const std::string& section, const std::string& key) const;
 			bool HasSection(const std::string& section) const;
 
-			std::vector<std::pair<std::string, std::string>> GetAllKeyValuePairs(const std::string& section) const;
+			const std::vector<std::pair<std::string, std::string>> GetAllKeyValuePairs(const std::string& section) const;
+			const void GetAllSections(std::list<CSimpleIniA::Entry>* const &out) const;
 
 			void DeleteSection(const std::string& section);
 			void DeleteKey(const std::string& section, const std::string& key);
