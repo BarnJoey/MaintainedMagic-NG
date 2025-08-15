@@ -2,348 +2,328 @@
 
 #include "Bimap.hpp"
 #include <SimpleIni.h>
+
 #include <atomic>
+#include <chrono>
+#include <format>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
-namespace MAINT
+namespace Maint
 {
-	inline constexpr std::uint32_t SLOT_RIGHT_HAND = 0x13F42;  // Right Hand
-	inline constexpr std::uint32_t SLOT_LEFT_HAND = 0x13F43;   // Left Hand
 
-	
-	inline const RE::TESRace* WerewolfBeastRace()
-	{
-		static const auto* r = RE::TESForm::LookupByID<RE::TESRace>(0x000CDD84);  // Skyrim.esm
-		return r;
-	}
-	inline const RE::TESRace* VampireBeastRace()
-	{
-		// Dawnguard’s Vampire Lord race (load-order high byte varies). Replace 0x02 with your DG index if you hardcode,
-		// or just look it up by EDID if you have a helper.
-		static const auto* r = RE::TESForm::LookupByID<RE::TESRace>(0x0200283A);  // DLC1VampireBeastRace
-		return r;
-	}
+	// ===== Utilities =============================================================
 
-	void ForceMaintainedSpellUpdate(RE::Actor* const&);
-	void AwardPlayerExperience(RE::PlayerCharacter* const& player);
-	void CheckUpkeepValidity(RE::Actor* const&);
+	[[nodiscard]] RE::FormID lexical_cast_hex_to_formid(std::string_view hex);
 
-	const auto lexical_cast_hex_to_formid(const std::string& hex_string)
-	{
-		// Accepts strings like "0x1234ABCD" or "1234ABCD" and throws on invalid input
-		std::string s = hex_string;
-		if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0) {
-			s = s.substr(2);
-		}
-		if (s.empty()) {
-			throw std::invalid_argument("Empty hex string");
-		}
-		std::istringstream iss(s);
-		uint32_t result{};
-		if (!(iss >> std::hex >> result)) {
-			throw std::invalid_argument("Failed to convert hexadecimal string to integer.");
-		}
-		return static_cast<RE::FormID>(result);
-	}
-
-	template <typename Data>
+	// A tiny threadsafe queue (keeps original semantics: references escape locks).
+	template <class T>
 	class ConcurrentQueue
 	{
-	private:
-		std::queue<Data> theQueue;
-		mutable std::mutex theMutex;
+		mutable std::mutex m_;
+		std::queue<T> q_;
 
 	public:
-		void push(const Data& data)
+		void push(const T& v)
 		{
-			std::lock_guard<std::mutex> lock(theMutex);
-			theQueue.push(data);
+			std::lock_guard _{ m_ };
+			q_.push(v);
 		}
-		[[nodiscard]] bool empty() const noexcept
+		[[nodiscard]] bool empty() const
 		{
-			std::lock_guard<std::mutex> lock(theMutex);
-			return theQueue.empty();
+			std::lock_guard _{ m_ };
+			return q_.empty();
 		}
-		Data& front()
+		T& front()
 		{
-			std::lock_guard<std::mutex> lock(theMutex);
-			return theQueue.front();
+			std::lock_guard _{ m_ };
+			return q_.front();
 		}
-		const Data& front() const
+		const T& front() const
 		{
-			std::lock_guard<std::mutex> lock(theMutex);
-			return theQueue.front();
+			std::lock_guard _{ m_ };
+			return q_.front();
 		}
 		void pop()
 		{
-			std::lock_guard<std::mutex> lock(theMutex);
-			theQueue.pop();
+			std::lock_guard _{ m_ };
+			q_.pop();
 		}
-		// Optional, non-breaking helper
-		bool try_pop(Data& out)
+		bool try_pop(T& out)
 		{
-			std::lock_guard<std::mutex> lock(theMutex);
-			if (theQueue.empty())
+			std::lock_guard _{ m_ };
+			if (q_.empty())
 				return false;
-			out = std::move(theQueue.front());
-			theQueue.pop();
+			out = std::move(q_.front());
+			q_.pop();
 			return true;
 		}
 	};
 
-	namespace CONFIG
+	// ===== Global config values (backed by INI) ==================================
+
+	namespace Config
 	{
 		inline constexpr const char* MAP_FILE = "Data/SKSE/Plugins/MaintainedMagicNG.ini";
 		inline constexpr const char* CONFIG_FILE = "Data/SKSE/Plugins/MaintainedMagicNG.Config.ini";
-		inline bool DoSilenceFX = false;
-		inline long CostBaseDuration = 60;          // seconds
-		inline float CostReductionExponent = 0.0f;  // disabled by default
-		inline bool AllowBoundWeapons = true;
-		inline float MaintainedExpMultiplier = 1.0;
 
+		inline bool DoSilenceFX = false;
+		inline long CostBaseDuration = 60;
+		inline float CostReductionExponent = 0.0f;
+		inline bool AllowBoundWeapons = true;
+		inline float MaintainedExpMultiplier = 1.0f;
+
+		// Simple wrapper over SimpleIni with multi-instance cache by path.
 		class ConfigBase
 		{
-		private:
-			static inline std::map<std::string, ConfigBase*> MultiConfigMap;
-
-			CSimpleIniA Ini;
-			std::string IniPath;
-			ConfigBase(std::string const& iniPath) :
-				IniPath(iniPath)
+			CSimpleIniA ini_;
+			std::string path_;
+			static inline std::map<std::string, ConfigBase*> cache_;
+			explicit ConfigBase(std::string p) :
+				path_(std::move(p))
 			{
-				Ini.SetUnicode();
-				Ini.LoadFile(iniPath.c_str());
+				ini_.SetUnicode();
+				ini_.LoadFile(path_.c_str());
 			}
 
 		public:
-			static ConfigBase* GetSingleton(std::string const& iniPath)
-			{
-				if (!MultiConfigMap.contains(iniPath)) {
-					logger::info("Load INI: {}", iniPath);
-					ConfigBase* instance = new ConfigBase(iniPath);
-					MultiConfigMap[iniPath] = instance;
-				}
-				auto const& ret = MultiConfigMap.at(iniPath);
-				return ret;
-			}
+			static ConfigBase* GetSingleton(const std::string& path);
+			bool HasKey(const std::string& section, const std::string& key) const;
+			bool HasSection(const std::string& section) const;
 
-			bool HasKey(const std::string& section, const std::string& key)
-			{
-				return Ini.KeyExists(section.c_str(), key.c_str());
-			}
+			std::vector<std::pair<std::string, std::string>> GetAllKeyValuePairs(const std::string& section) const;
 
-			bool HasSection(const std::string& section)
-			{
-				return Ini.SectionExists(section.c_str());
-			}
+			void DeleteSection(const std::string& section);
+			void DeleteKey(const std::string& section, const std::string& key);
 
-			const std::vector<std::pair<std::string, std::string>> GetAllKeyValuePairs(const std::string& section) const
-			{
-				std::vector<std::pair<std::string, std::string>> ret;
-				CSimpleIniA::TNamesDepend keys;
-				Ini.GetAllKeys(section.c_str(), keys);
-				for (auto& key : keys) {
-					auto val = Ini.GetValue(section.c_str(), key.pItem);
-					ret.push_back({ key.pItem, val });
-				}
+			std::string GetValue(const std::string& section, const std::string& key) const;
+			long GetLongValue(const std::string& section, const std::string& key) const;
+			bool GetBoolValue(const std::string& section, const std::string& key) const;
+			double GetDoubleValue(const std::string& section, const std::string& key) const;
 
-				return ret;
-			}
-
-			void DeleteSection(const std::string& section)
-			{
-				Ini.Delete(section.c_str(), nullptr, true);
-			}
-
-			void DeleteKey(const std::string& section, const std::string& key)
-			{
-				Ini.Delete(section.c_str(), key.c_str());
-			}
-
-			std::string GetValue(const std::string& section, const std::string& key)
-			{
-				return Ini.GetValue(section.c_str(), key.c_str());
-			}
-
-			long GetLongValue(const std::string& section, const std::string& key)
-			{
-				return Ini.GetLongValue(section.c_str(), key.c_str());
-			}
-
-			bool GetBoolValue(const std::string& section, const std::string& key)
-			{
-				return Ini.GetBoolValue(section.c_str(), key.c_str());
-			}
-
-			double GetDoubleValue(const std::string& section, const std::string& key)
-			{
-				return Ini.GetDoubleValue(section.c_str(), key.c_str());
-			}
-
-			void SetValue(const std::string& section, const std::string& key, const std::string& value, const std::string& comment = std::string())
-			{
-				Ini.SetValue(section.c_str(), key.c_str(), value.c_str(), comment.length() > 0 ? comment.c_str() : (const char*)0);
-			}
-
-			void SetBoolValue(const std::string& section, const std::string& key, const bool value, const std::string& comment = std::string())
-			{
-				Ini.SetBoolValue(section.c_str(), key.c_str(), value, comment.length() > 0 ? comment.c_str() : (const char*)0);
-			}
-
-			void SetLongValue(const std::string& section, const std::string& key, const long value, const std::string& comment = std::string())
-			{
-				Ini.SetLongValue(section.c_str(), key.c_str(), value, comment.length() > 0 ? comment.c_str() : (const char*)0);
-			}
-
-			void SetDoubleValue(const std::string& section, const std::string& key, const double value, const std::string& comment = std::string())
-			{
-				Ini.SetDoubleValue(section.c_str(), key.c_str(), value, comment.length() > 0 ? comment.c_str() : (const char*)0);
-			}
-
-			void Save()
-			{
-				Ini.SaveFile(IniPath.c_str());
-			}
-
+			void SetValue(const std::string& section, const std::string& key, const std::string& value, const std::string& comment = {});
+			void SetBoolValue(const std::string& section, const std::string& key, bool value, const std::string& comment = {});
+			void SetLongValue(const std::string& section, const std::string& key, long value, const std::string& comment = {});
+			void SetDoubleValue(const std::string& section, const std::string& key, double value, const std::string& comment = {});
+			void Save();
 			ConfigBase(ConfigBase const&) = delete;
 			void operator=(ConfigBase const&) = delete;
 		};
-	}
+	}  // namespace CONFIG
 
-	namespace CACHE
+	// ===== Domain Types ==========================================================
+
+	namespace Domain
 	{
 		using InfiniteSpell = RE::SpellItem;
 		using DebuffSpell = RE::SpellItem;
-		using MaintainedSpell = std::pair<InfiniteSpell*, DebuffSpell*>;
+		struct MaintainedPair
+		{
+			InfiniteSpell* infinite{};
+			DebuffSpell* debuff{};
+		};
 
-		inline BiMap<RE::SpellItem*, MaintainedSpell> SpellToMaintainedSpell;
-		inline std::set<std::pair<RE::SpellItem*, RE::SpellItem*>> DeferredDispelList;
-	}
+		// Provide ordering & equality so MaintainedPair can be a map key
+		inline bool operator==(const MaintainedPair& a, const MaintainedPair& b) noexcept
+		{
+			return a.infinite == b.infinite && a.debuff == b.debuff;
+		}
 
-	class FORMS
+		inline bool operator<(const MaintainedPair& a, const MaintainedPair& b) noexcept
+		{
+			// Order by addresses (stable and cheap)
+			if (a.infinite != b.infinite) {
+				return std::less<InfiniteSpell*>{}(a.infinite, b.infinite);
+			}
+			return std::less<DebuffSpell*>{}(a.debuff, b.debuff);
+			// Alternatively:
+			// return std::tie(a.infinite, a.debuff) < std::tie(b.infinite, b.debuff);
+		}
+	}  // namespace Domain
+
+	// ===== Catalogs / Repositories ==============================================
+
+	class FormsRepository
 	{
 	public:
 		static constexpr RE::FormID FORMID_OFFSET_BASE = 0xFF03F000;
-		RE::FormID CurrentOffset;
 
-		void SetOffset(RE::FormID offset)
-		{
-			CurrentOffset = offset;
-		}
-		void LoadOffset(const CONFIG::ConfigBase* config, const std::string& saveFile)
-		{
-			constexpr auto getLargestFormIDFromPair = [](const std::string& part) -> RE::FormID {
-				std::size_t tildePos = part.find("~");
+		static FormsRepository& Get();
 
-				if (tildePos == std::string::npos)
-					return 0x0;
-				try {
-					auto leftID = lexical_cast_hex_to_formid(part.substr(0, tildePos));
-					auto rightID = lexical_cast_hex_to_formid(part.substr(tildePos + 1));
-					return leftID > rightID ? leftID : rightID;
-				} catch (...) {
-					return 0x0;
-				}
-			};
+		void SetOffset(RE::FormID offset);
+		void LoadOffset(const Config::ConfigBase* ini, const std::string& saveFile);
+		RE::FormID NextFormID() const;
 
-			RE::FormID off = 0x0;
-			for (const auto& [k, v] : config->GetAllKeyValuePairs(std::format("MAP:{}", saveFile))) {
-				auto cur = getLargestFormIDFromPair(v);
-				if (cur > off)
-					off = cur;
-			}
-			off &= ~FORMID_OFFSET_BASE;
-			CurrentOffset = off;
-			logger::info("Local OFFSET: 0x{:08X}", CurrentOffset);
-			logger::info("Global OFFSET: 0x{:08X}", FORMID_OFFSET_BASE);
-		}
-		RE::FormID NextFormID() const
-		{
-			static RE::FormID current = 0;
-			return FORMID_OFFSET_BASE + (++current) + CurrentOffset;
-		}
-		static FORMS& GetSingleton()
-		{
-			static FORMS instance;
-			return instance;
-		}
+		// Shared handles/keywords/globals
+		RE::BGSEquipSlot* EquipSlotVoice{};
+		RE::BGSKeyword* KywdMagicCloak{};
+		RE::BGSKeyword* KywdMaintainedSpell{};
+		RE::BGSKeyword* KywdExcludeFromSystem{};
+		RE::SpellItem* SpelMagickaDebuffTemplate{};
+		RE::TESGlobal* GlobMaintainModeEnabled{};
+		RE::BGSListForm* FlstMaintainedSpellToggle{};
+		RE::SpellItem* SpelMindCrush{};
 
-		//RE::BGSEquipSlot* EquipSlotRight = RE::TESForm::LookupByID<RE::BGSEquipSlot>(0x13F42);
-		RE::BGSEquipSlot* EquipSlotVoice = RE::TESForm::LookupByID<RE::BGSEquipSlot>(0x25BEE);
-		RE::BGSKeyword* KywdMagicCloak = RE::TESForm::LookupByID<RE::BGSKeyword>(0xB62E4);
-		RE::BGSKeyword* KywdMaintainedSpell = RE::TESDataHandler::GetSingleton()->LookupForm<RE::BGSKeyword>(0x801, "MaintainedMagic.esp"sv);
-		RE::BGSKeyword* KywdExcludeFromSystem = RE::TESDataHandler::GetSingleton()->LookupForm<RE::BGSKeyword>(0x80A, "MaintainedMagic.esp"sv);
-		RE::SpellItem* SpelMagickaDebuffTemplate = RE::TESDataHandler::GetSingleton()->LookupForm<RE::SpellItem>(0x802, "MaintainedMagic.esp"sv);
-		RE::TESGlobal* GlobMaintainModeEnabled = RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESGlobal>(0x805, "MaintainedMagic.esp"sv);
-		RE::BGSListForm* FlstMaintainedSpellToggle = RE::TESDataHandler::GetSingleton()->LookupForm<RE::BGSListForm>(0x80B, "MaintainedMagic.esp"sv);
-		RE::SpellItem* SpelMindCrush = RE::TESDataHandler::GetSingleton()->LookupForm<RE::SpellItem>(0x80D, "MaintainedMagic.esp"sv);
+		// Beast races
+		const RE::TESRace* WerewolfBeastRace() const;
+		const RE::TESRace* VampireBeastRace() const;
 
 	private:
-		// Private constructor to prevent instantiation
-		FORMS() {}
+		RE::FormID currentOffset_{ 0 };
+		mutable RE::FormID serial_{ 0 };
 
-		// Delete copy constructor and assignment operator to prevent cloning
-		FORMS(const FORMS&) = delete;
-		FORMS& operator=(const FORMS&) = delete;
+		FormsRepository();
+		FormsRepository(const FormsRepository&) = delete;
+		FormsRepository& operator=(const FormsRepository&) = delete;
 	};
+
+	// ===== Policy / Calculators ==================================================
+
+	class SpellEligibilityPolicy
+	{
+	public:
+		static bool IsMaintainable(RE::SpellItem* const& spell, RE::Actor* const& caster);
+	};
+
+	class UpkeepCostCalculator
+	{
+	public:
+		static float Calculate(RE::SpellItem* const& baseSpell, RE::Actor* const& caster);
+	};
+
+	// ===== Factories / Builders ==================================================
+
+	class SpellFactory
+	{
+	public:
+		static RE::SpellItem* CreateInfiniteFrom(RE::SpellItem* const& base);
+		static RE::SpellItem* CreateDebuffFrom(RE::SpellItem* const& base, float magnitude);
+	};
+
+	class FXSilencer
+	{
+	public:
+		// Disable FXPersist on effects that are safe to silence and return the ones we changed.
+		static std::vector<RE::Effect*> SilenceSpellFX(RE::SpellItem* const& spell);
+	};
+
+	// ===== State / Registries ====================================================
+
+	class MaintainedRegistry
+	{
+	public:
+		static MaintainedRegistry& Get();
+
+		void clear();
+		bool empty() const;
+
+		bool hasBase(RE::SpellItem* base) const;
+		std::optional<Domain::MaintainedPair> getByBase(RE::SpellItem* base) const;
+
+		void insert(RE::SpellItem* base, Domain::MaintainedPair pair);
+		void eraseBase(RE::SpellItem* base);
+
+		const BiMap<RE::SpellItem*, Domain::MaintainedPair>::forward_map_t& map() const;
+
+		// Deferred cleanups for bound weapons
+		void deferDispel(RE::SpellItem* maintained, RE::SpellItem* base);
+		bool isDeferred(RE::SpellItem* maintained, RE::SpellItem* base) const;
+		void forEachDeferred(const std::function<void(RE::SpellItem*, RE::SpellItem*, bool& erase)>& fn);
+
+	private:
+		BiMap<RE::SpellItem*, Domain::MaintainedPair> map_;
+		std::set<std::pair<RE::SpellItem*, RE::SpellItem*>> deferred_;
+	};
+
+	class MaintainedEffectsCache
+	{
+	public:
+		const std::unordered_map<RE::SpellItem*, std::vector<RE::ActiveEffect*>>&
+			GetFor(RE::Actor* actor);
+
+	private:
+		std::unordered_map<RE::SpellItem*, std::vector<RE::ActiveEffect*>> cache_{};
+		ptrdiff_t lastCount_{ 0 };
+		void rebuild(RE::Actor* actor);
+	};
+
+	// ===== Orchestration / Application Services =================================
+
+	class SaveMappingService
+	{
+	public:
+		static void Load(const std::string& saveIdentifier);
+		static void Store(const std::string& saveIdentifierWithExt);
+	};
+
+	class EffectRestorer
+	{
+	public:
+		static void Push(RE::Effect* const& e);
+		static void DrainAndRestore();  // called by player update hook
+	private:
+		static ConcurrentQueue<RE::Effect*>& Q();
+	};
+
+	class ExperienceService
+	{
+	public:
+		static void AwardPlayerExperience(RE::PlayerCharacter* const& player);
+	};
+
+	class UpkeepSupervisor
+	{
+	public:
+		static void ForceMaintainedSpellUpdate(RE::Actor* const& actor);
+		static void CheckUpkeepValidity(RE::Actor* const& actor);
+	};
+
+	class MaintenanceOrchestrator
+	{
+	public:
+		static void MaintainSpell(RE::SpellItem* const& baseSpell, RE::Actor* const& caster);
+		static void PurgeAll();                // clear registry + FLST, delete temp forms
+		static void BuildActiveSpellsCache();  // rebuild toggles + restore debuff magnitudes
+	};
+
+	// ===== Hooks / Integration ===================================================
 
 	class UpdatePCHook
 	{
 	public:
-		static void Install()
-		{
-			REL::Relocation<std::uintptr_t> pcVTable{ RE::VTABLE_PlayerCharacter[0] };
-			UpdatePC = pcVTable.write_vfunc(0xAD, UpdatePCMod);
-		}
-
-		static void ResetEffCheckTimer()
-		{
-			TimerActiveEffCheck = 0.0f;
-		}
-
-		static void PushFXRestore(RE::Effect* const& eff)
-		{
-			EffectRestorationQueue.push(eff);
-			ResetEffCheckTimer();
-		}
+		static void Install();
+		static void ResetEffCheckTimer();
+		static void PushFXRestore(RE::Effect* const& eff);
 
 	private:
-		UpdatePCHook()
-		{
-			TimerActiveEffCheck = TimerExperienceAward = 0.0f;
-		}
-
-		static void UpdatePCMod(RE::PlayerCharacter* pc, float delta)
-		{
-			UpdatePC(pc, delta);
-			TimerActiveEffCheck += delta;
-			TimerExperienceAward += delta;
-			if (TimerActiveEffCheck >= 0.50f) {
-				MAINT::ForceMaintainedSpellUpdate(pc);
-				MAINT::CheckUpkeepValidity(pc);
-				while (!EffectRestorationQueue.empty()) {
-					EffectRestorationQueue.front()->baseEffect->data.flags.set(RE::EffectSetting::EffectSettingData::Flag::kFXPersist);
-					EffectRestorationQueue.pop();
-				}
-				TimerActiveEffCheck = 0.0f;
-			}
-			if (TimerExperienceAward >= 300) {
-				MAINT::AwardPlayerExperience(pc);
-				TimerExperienceAward = 0.0f;
-			}
-		}
+		static void UpdatePCMod(RE::PlayerCharacter* pc, float delta);
 
 		static inline REL::Relocation<decltype(UpdatePCMod)> UpdatePC;
-
-		static inline std::atomic<float> TimerActiveEffCheck;
-		static inline std::atomic<float> TimerExperienceAward;
-		static inline ConcurrentQueue<RE::Effect*> EffectRestorationQueue;
+		static inline std::atomic<float> TimerActiveEffCheck{ 0.0f };
+		static inline std::atomic<float> TimerExperienceAward{ 0.0f };
+		static inline ConcurrentQueue<RE::Effect*> EffectRestorationQueue{};
 	};
-}
+
+	// Legacy public C-style API (kept for external call sites if any)
+	void ForceMaintainedSpellUpdate(RE::Actor* const&);
+	void AwardPlayerExperience(RE::PlayerCharacter* const& player);
+	void CheckUpkeepValidity(RE::Actor* const&);
+
+	// ===== Lifecycle (messaging) =================================================
+
+	void OnInit(SKSE::MessagingInterface::Message* const a_msg);
+	bool Load();
+
+}  // namespace MAINT
+
+// Global shims (declarations) — optional
+bool Load();
+void OnInit(SKSE::MessagingInterface::Message* const);

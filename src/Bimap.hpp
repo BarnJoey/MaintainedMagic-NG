@@ -1,105 +1,83 @@
 #pragma once
 
-#include <functional>
 #include <map>
 #include <optional>
 #include <stdexcept>
-#include <type_traits>
 
-// Improved BiMap
-// - GetForwardMap/GetReverseMap return const references (no copies)
-// - getValue/getKey use find() to avoid double lookups
-// - getValueOrNull/getKeyOrNull return std::optional to avoid UB when Key/Value are not pointers
-// - added noexcept where appropriate
+// A simple, header-only BiMap using std::map (ordered, stable iteration).
+// - C++20 niceties: insert_or_assign, [[nodiscard]]
+// - Optional getters to avoid UB for non-pointer types.
 
-template <typename KeyType, typename ValueType>
+template <class K, class V>
 class BiMap
 {
 public:
-	using forward_map_t = std::map<KeyType, ValueType>;
-	using reverse_map_t = std::map<ValueType, KeyType>;
+	using forward_map_t = std::map<K, V>;
+	using reverse_map_t = std::map<V, K>;
 	using size_type = typename forward_map_t::size_type;
 
 private:
-	forward_map_t forwardMap;
-	reverse_map_t reverseMap;
+	forward_map_t f_;
+	reverse_map_t r_;
 
 public:
-	// Return const references to avoid expensive copies
-	const forward_map_t& GetForwardMap() const noexcept { return forwardMap; }
-	const reverse_map_t& GetReverseMap() const noexcept { return reverseMap; }
+	[[nodiscard]] const forward_map_t& GetForwardMap() const noexcept { return f_; }
+	[[nodiscard]] const reverse_map_t& GetReverseMap() const noexcept { return r_; }
 
-	// Insert or replace mapping
-	void insert(const KeyType& key, const ValueType& value)
+	void insert(const K& k, const V& v)
 	{
-		forwardMap.insert_or_assign(key, value);
-		reverseMap.insert_or_assign(value, key);
+		f_.insert_or_assign(k, v);
+		r_.insert_or_assign(v, k);
 	}
-
-	// Throws if not found
-	const ValueType& getValue(const KeyType& key) const
+	void eraseKey(const K& k)
 	{
-		auto it = forwardMap.find(key);
-		if (it == forwardMap.end()) {
-			throw std::out_of_range("Key not found");
-		}
-		return it->second;
-	}
-
-	// Returns optional (no UB if KeyType/ValueType are non-pointer)
-	std::optional<ValueType> getValueOrNull(const KeyType& key) const
-	{
-		auto it = forwardMap.find(key);
-		if (it == forwardMap.end())
-			return std::nullopt;
-		return it->second;
-	}
-
-	const KeyType& getKey(const ValueType& value) const
-	{
-		auto it = reverseMap.find(value);
-		if (it == reverseMap.end()) {
-			throw std::out_of_range("Value not found");
-		}
-		return it->second;
-	}
-
-	std::optional<KeyType> getKeyOrNull(const ValueType& value) const
-	{
-		auto it = reverseMap.find(value);
-		if (it == reverseMap.end())
-			return std::nullopt;
-		return it->second;
-	}
-
-	bool containsKey(const KeyType& key) const noexcept { return forwardMap.find(key) != forwardMap.end(); }
-	bool containsValue(const ValueType& value) const noexcept { return reverseMap.find(value) != reverseMap.end(); }
-
-	void eraseKey(const KeyType& key)
-	{
-		auto it = forwardMap.find(key);
-		if (it != forwardMap.end()) {
-			// erase corresponding reverse entry
-			reverseMap.erase(it->second);
-			forwardMap.erase(it);
+		if (auto it = f_.find(k); it != f_.end()) {
+			r_.erase(it->second);
+			f_.erase(it);
 		}
 	}
-
-	void eraseValue(const ValueType& value)
+	void eraseValue(const V& v)
 	{
-		auto it = reverseMap.find(value);
-		if (it != reverseMap.end()) {
-			forwardMap.erase(it->second);
-			reverseMap.erase(it);
+		if (auto it = r_.find(v); it != r_.end()) {
+			f_.erase(it->second);
+			r_.erase(it);
 		}
 	}
-
 	void clear() noexcept
 	{
-		forwardMap.clear();
-		reverseMap.clear();
+		f_.clear();
+		r_.clear();
 	}
 
-	size_type size() const noexcept { return forwardMap.size(); }
-	bool empty() const noexcept { return forwardMap.empty(); }
+	[[nodiscard]] bool containsKey(const K& k) const noexcept { return f_.find(k) != f_.end(); }
+	[[nodiscard]] bool containsValue(const V& v) const noexcept { return r_.find(v) != r_.end(); }
+
+	[[nodiscard]] const V& getValue(const K& k) const
+	{
+		if (auto it = f_.find(k); it != f_.end())
+			return it->second;
+		throw std::out_of_range("Key not found");
+	}
+	[[nodiscard]] const K& getKey(const V& v) const
+	{
+		if (auto it = r_.find(v); it != r_.end())
+			return it->second;
+		throw std::out_of_range("Value not found");
+	}
+
+	[[nodiscard]] std::optional<V> getValueOrNull(const K& k) const
+	{
+		if (auto it = f_.find(k); it != f_.end())
+			return it->second;
+		return std::nullopt;
+	}
+	[[nodiscard]] std::optional<K> getKeyOrNull(const V& v) const
+	{
+		if (auto it = r_.find(v); it != r_.end())
+			return it->second;
+		return std::nullopt;
+	}
+
+	[[nodiscard]] size_type size() const noexcept { return f_.size(); }
+	[[nodiscard]] bool empty() const noexcept { return f_.empty(); }
 };
