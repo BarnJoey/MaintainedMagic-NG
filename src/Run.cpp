@@ -5,6 +5,48 @@
 
 namespace MAINT
 {
+	// Cache active maintained effects and only update when spells change
+	class MaintainedEffectsCache
+	{
+	private:
+		std::unordered_map<RE::SpellItem*, std::vector<RE::ActiveEffect*>> cachedEffects;
+		ptrdiff_t lastEffectCount{ 0 };
+
+		void RebuildCache(RE::Actor* theActor)
+		{
+			static const auto& mmDebufEffect = MAINT::FORMS::GetSingleton().SpelMagickaDebuffTemplate->effects.front();
+			cachedEffects.clear();
+			const auto& effList = theActor->AsMagicTarget()->GetActiveEffectList();
+			for (const auto& e : *effList) {
+				if (auto* asSpl = e->spell ? e->spell->As<RE::SpellItem>() : nullptr; asSpl && e->effect->baseEffect != mmDebufEffect->baseEffect) {
+					const bool hasKywd = asSpl->HasKeyword(MAINT::FORMS::GetSingleton().KywdMaintainedSpell);
+					const bool isBaseSpell = MAINT::CACHE::SpellToMaintainedSpell.containsKey(asSpl);
+					if (isBaseSpell) {
+						const auto& pair = MAINT::CACHE::SpellToMaintainedSpell.getValue(asSpl);
+						auto* mSpl = pair.first;  // maintained (infinite) spell
+						cachedEffects[mSpl].push_back(e);
+						++lastEffectCount;
+					} else if (hasKywd) {
+						e->elapsedSeconds = 0.0f;
+						cachedEffects[asSpl].push_back(e);
+						++lastEffectCount;
+					}
+				}
+			}
+		}
+
+	public:
+		const auto& GetMaintainedEffects(RE::Actor* actor)
+		{
+			auto effCount = std::ranges::distance(actor->AsMagicTarget()->GetActiveEffectList()->begin(), actor->AsMagicTarget()->GetActiveEffectList()->end());
+			if (effCount != lastEffectCount) {
+				RebuildCache(actor);
+				lastEffectCount = effCount;
+			}
+			return cachedEffects;
+		}
+	};
+
 	// -- Small helpers --------------------------------------------------------
 
 	static inline bool IsBoundWeaponSpell(const RE::SpellItem* spell)
@@ -486,7 +528,7 @@ namespace MAINT
 		if (theActor->GetRace() == WerewolfBeastRace() || theActor->GetRace() == VampireBeastRace() || theActor->AsMagicTarget()->HasMagicEffect(mindCrush->effects[0]->baseEffect))
 			return;
 
-		logger::debug("Triggered Mind Crush");
+		spdlog::debug("Triggered Mind Crush");
 
 		const auto& map = MAINT::CACHE::SpellToMaintainedSpell.GetForwardMap();
 		const float totalMagDrain = std::accumulate(map.begin(), map.end(), 0.0f,
@@ -526,12 +568,12 @@ namespace MAINT
 
 				// 0 = left, 1 = right
 				if (theActor->GetActorRuntimeData().selectedSpells[0] == maintSpell) {
-					logger::debug("Deferred restore (left hand): {}", maintSpell->GetName());
+					spdlog::debug("Deferred restore (left hand): {}", maintSpell->GetName());
 					equipMgr->EquipSpell(theActor, baseSpell, LeftHandSlot());
 					doErase = true;
 				}
 				if (theActor->GetActorRuntimeData().selectedSpells[1] == maintSpell) {
-					logger::debug("Deferred restore (right hand): {}", maintSpell->GetName());
+					spdlog::debug("Deferred restore (right hand): {}", maintSpell->GetName());
 					equipMgr->EquipSpell(theActor, baseSpell, RightHandSlot());
 					doErase = true;
 				}
@@ -545,26 +587,8 @@ namespace MAINT
 		}
 
 		// Build Spell->ActiveEffect set (reuse container to avoid churn)
-		static std::map<RE::SpellItem*, std::unordered_multiset<RE::ActiveEffect*>> SpellToActiveEffects;
-		SpellToActiveEffects.clear();
-
-		static auto const& mmDebufEffect = MAINT::FORMS::GetSingleton().SpelMagickaDebuffTemplate->effects.front();
-
-		const auto& effList = theActor->AsMagicTarget()->GetActiveEffectList();
-		for (const auto& e : *effList) {
-			if (auto* asSpl = e->spell ? e->spell->As<RE::SpellItem>() : nullptr; asSpl && e->effect->baseEffect != mmDebufEffect->baseEffect) {
-				const bool hasKywd = asSpl->HasKeyword(MAINT::FORMS::GetSingleton().KywdMaintainedSpell);
-				const bool isBaseSpell = MAINT::CACHE::SpellToMaintainedSpell.containsKey(asSpl);
-				if (isBaseSpell) {
-					const auto& pair = MAINT::CACHE::SpellToMaintainedSpell.getValue(asSpl);
-					auto* mSpl = pair.first;  // maintained (infinite) spell
-					SpellToActiveEffects[mSpl].insert(e);
-				} else if (hasKywd) {
-					e->elapsedSeconds = 0.0f;
-					SpellToActiveEffects[asSpl].insert(e);
-				}
-			}
-		}
+		static auto const& effCache = std::make_unique<MaintainedEffectsCache>();
+		const auto& SpellToActiveEffects = effCache->GetMaintainedEffects(theActor);
 
 		std::vector<std::pair<RE::SpellItem*, MAINT::CACHE::MaintainedSpell>> toRemove;
 		toRemove.reserve(MAINT::CACHE::SpellToMaintainedSpell.size());
@@ -690,7 +714,7 @@ namespace MAINT
 				spdlog::info("Dispelling missing/invalid {} (0x{:08X})", maintSpell->GetName(), maintSpell->GetFormID());
 
 				if (IsBoundWeaponSpell(maintSpell) && !MAINT::CACHE::DeferredDispelList.contains({ maintSpell, baseSpell })) {
-					logger::debug("Deferring cleanup of {}", maintSpell->GetName());
+					spdlog::debug("Deferring cleanup of {}", maintSpell->GetName());
 					MAINT::CACHE::DeferredDispelList.emplace(maintSpell, baseSpell);
 				}
 				if (theActor->HasSpell(debuffSpell)) {
