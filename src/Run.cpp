@@ -473,6 +473,9 @@ namespace Maint
 		const auto effDur32 = std::max<uint32_t>(1u, firstEff->GetDuration());
 
 		float mult = effDur32 < NEUTRAL ? std::pow(NEUTRAL / effDur32, 2.0f) : std::sqrt(NEUTRAL / effDur32);
+		const float magicaRegen = caster->AsActorValueOwner()->GetActorValue(RE::ActorValue::kMagickaRateMult);
+		mult *= magicaRegen > 0.0f ? (500.f / (500.f + magicaRegen)) : 1.f;
+
 
 		float finalDur = baseDur;
 		for (auto* aeff : *caster->AsMagicTarget()->GetActiveEffectList()) {
