@@ -72,9 +72,9 @@ namespace Maint
 
 	namespace Config
 	{
-		inline constexpr const char* MAP_FILE = "Data/SKSE/Plugins/MaintainedMagicNG.ini";
 		inline constexpr const char* CONFIG_FILE = "Data/SKSE/Plugins/MaintainedMagicNG.Config.ini";
 
+		inline std::string SAVES_PATH = "disabled";
 		inline bool DoSilenceFX = false;
 		inline long CostBaseDuration = 60;
 		inline float CostReductionExponent = 0.0f;
@@ -157,13 +157,7 @@ namespace Maint
 	class FormsRepository
 	{
 	public:
-		static constexpr RE::FormID FORMID_OFFSET_BASE = 0xFF03F000;
-
 		static FormsRepository& Get();
-
-		void SetOffset(RE::FormID offset);
-		void LoadOffset(const Config::ConfigBase* ini, const std::string& saveFile);
-		RE::FormID NextFormID() const;
 
 		// Shared handles/keywords/globals
 		RE::BGSEquipSlot* EquipSlotVoice{};
@@ -181,7 +175,6 @@ namespace Maint
 		const RE::TESRace* VampireBeastRace() const;
 
 	private:
-		RE::FormID currentOffset_{ 0 };
 		mutable RE::FormID serial_{ 0 };
 
 		FormsRepository();
@@ -208,8 +201,8 @@ namespace Maint
 	class SpellFactory
 	{
 	public:
-		static RE::SpellItem* CreateInfiniteFrom(RE::SpellItem* const& base);
-		static RE::SpellItem* CreateDebuffFrom(RE::SpellItem* const& base, float magnitude);
+		static RE::SpellItem* CreateInfiniteFrom(RE::SpellItem* const& base, std::optional<RE::FormID> aFormID = std::nullopt);
+		static RE::SpellItem* CreateDebuffFrom(RE::SpellItem* const& base, float const& magnitude, std::optional<RE::FormID> aFormID = std::nullopt);
 	};
 
 	class FXSilencer
@@ -247,6 +240,62 @@ namespace Maint
 		std::set<std::pair<RE::SpellItem*, RE::SpellItem*>> deferred_;
 	};
 
+	// ===== FormID Allocator ====================================================
+
+	class Allocator
+	{
+	public:
+		static constexpr RE::FormID FORMID_OFFSET_BASE = 0xFF03F000;
+
+		static constexpr std::uint32_t MIN_LOCAL_ID = 1;
+		static constexpr std::uint32_t MAX_LOCAL_ID = 64;
+		static constexpr std::uint32_t TOTAL_IDS = 64;
+
+		// ----------------------------
+		// Allocation interface
+		// ----------------------------
+
+		static Allocator& Get();
+
+		std::optional<RE::FormID> AllocateFormID();
+		std::optional<RE::FormID> AllocateSpecificFormID(RE::FormID fullFormID);
+		void FreeFormID(RE::FormID fullFormID);
+
+		void ReconcileWithCache();
+
+		bool IsAllocated(RE::FormID fullFormID) const;
+		std::size_t GetFreeFormIDCount() const;
+		void Clear();
+
+	private:
+		// ----------------------------
+		// Bitmask helpers
+		// ----------------------------
+
+		static constexpr std::uint64_t FULL_MASK = ~0ull;
+
+		std::uint64_t _allocatedMask{ 0 };
+
+		static std::uint32_t FindFirstFreeIndex(std::uint64_t mask);
+		static constexpr std::uint64_t BitForIndex(std::uint32_t index);
+
+		void SetIndexAllocated(std::uint32_t index);
+		void ClearIndexAllocated(std::uint32_t index);
+		bool IsIndexAllocated(std::uint32_t index) const;
+
+		void MarkReferenced(std::uint64_t& mask, RE::FormID fullFormID) const;
+
+		// ----------------------------
+		// ID mapping
+		// ----------------------------
+
+		static constexpr RE::FormID IndexToLocalID(std::uint32_t index);
+		static constexpr std::uint32_t LocalIDToIndex(RE::FormID localID);
+		static constexpr RE::FormID MakeFullFormID(RE::FormID localID);
+		static constexpr RE::FormID ExtractLocalID(RE::FormID fullFormID);
+		static constexpr bool IsInManagedRange(RE::FormID fullFormID);
+	};
+
 	class MaintainedEffectsCache
 	{
 	public:
@@ -261,13 +310,6 @@ namespace Maint
 	};
 
 	// ===== Orchestration / Application Services =================================
-
-	class SaveMappingService
-	{
-	public:
-		static void Load(const std::string& saveIdentifier);
-		static void Store(const std::string& saveIdentifierWithExt);
-	};
 
 	class EffectRestorer
 	{

@@ -1,4 +1,4 @@
-#include "Run.hpp"
+﻿#include "Run.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -13,21 +13,6 @@
 
 namespace Maint
 {
-
-	RE::FormID lexical_cast_hex_to_formid(std::string_view hex)
-	{
-		std::string s(hex);
-		if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0)
-			s = s.substr(2);
-		if (s.empty())
-			throw std::invalid_argument("Empty hex string");
-		std::istringstream iss(s);
-		uint32_t out{};
-		if (!(iss >> std::hex >> out))
-			throw std::invalid_argument("Invalid hex string");
-		return static_cast<RE::FormID>(out);
-	}
-
 	namespace
 	{
 		inline constexpr std::uint32_t SLOT_RIGHT_HAND = 0x13F42;
@@ -140,41 +125,6 @@ namespace Maint
 		SpelMindCrush = RE::TESDataHandler::GetSingleton()->LookupForm<RE::SpellItem>(0x80D, "MaintainedMagic.esp"sv);
 	}
 
-	void FormsRepository::SetOffset(RE::FormID o) { currentOffset_ = o; }
-
-	void FormsRepository::LoadOffset(const Config::ConfigBase* ini, const std::string& saveFile)
-	{
-		constexpr auto getLargestInPair = [](const std::string& s) -> RE::FormID {
-			auto p = s.find('~');
-			if (p == std::string::npos)
-				return 0;
-			try {
-				auto left = lexical_cast_hex_to_formid(s.substr(0, p));
-				auto right = lexical_cast_hex_to_formid(s.substr(p + 1));
-				return left > right ? left : right;
-			} catch (...) {
-				return 0;
-			}
-		};
-
-		RE::FormID off{ 0 };
-		for (const auto& [k, v] : ini->GetAllKeyValuePairs(std::format("MAP:{}", saveFile))) {
-			(void)k;
-			if (auto cur = getLargestInPair(v); cur > off)
-				off = cur;
-		}
-		off &= ~FORMID_OFFSET_BASE;
-		currentOffset_ = off;
-		logger::info("Local OFFSET:  0x{:08X}", currentOffset_);
-		logger::info("Global OFFSET: 0x{:08X}", FORMID_OFFSET_BASE);
-	}
-
-	RE::FormID FormsRepository::NextFormID() const
-	{
-		static RE::FormID local{};
-		return FORMID_OFFSET_BASE + (++local) + currentOffset_;
-	}
-
 	const RE::TESRace* FormsRepository::WerewolfBeastRace() const
 	{
 		static const auto* r = RE::TESForm::LookupByID<RE::TESRace>(0x000CDD84);
@@ -271,7 +221,7 @@ namespace Maint
 
 	// ================= SpellFactory ==============================================
 
-	RE::SpellItem* SpellFactory::CreateInfiniteFrom(RE::SpellItem* const& base)
+	RE::SpellItem* Maint::SpellFactory::CreateInfiniteFrom(RE::SpellItem* const& base, std::optional<RE::FormID> aFormID)
 	{
 		static auto* factory = RE::IFormFactory::GetConcreteFormFactoryByType<RE::SpellItem>();
 		const auto* file = base->GetFile(0);
@@ -279,7 +229,20 @@ namespace Maint
 		spdlog::info("Maintainify({})\n - FID {:08X}\n - File {}", base->GetName(), file ? base->GetLocalFormID() : base->GetFormID(), fileStr);
 
 		auto* out = factory->Create();
-		out->SetFormID(FormsRepository::Get().NextFormID(), false);
+
+		auto& forms = Allocator::Get();
+
+		// Allocate FormID (specific or automatic)
+		std::optional<RE::FormID> allocatedFormID = aFormID ? forms.AllocateSpecificFormID(*aFormID) : forms.AllocateFormID();
+
+		if (!allocatedFormID) {
+			logger::error(
+				"CreateMaintainSpell() - Failed to allocate FormID (free left: {})",
+				forms.GetFreeFormIDCount());
+			return nullptr;
+		}
+
+		out->SetFormID(*allocatedFormID, false);
 
 		out->fullName = std::format("Maintained {}", base->GetFullName());
 		out->data = base->data;
@@ -306,7 +269,7 @@ namespace Maint
 		return out;
 	}
 
-	RE::SpellItem* SpellFactory::CreateDebuffFrom(RE::SpellItem* const& base, float magnitude)
+	RE::SpellItem* Maint::SpellFactory::CreateDebuffFrom(RE::SpellItem* const& base, float const& magnitude, std::optional<RE::FormID> aFormID)
 	{
 		static auto* tmpl = FormsRepository::Get().SpelMagickaDebuffTemplate;
 		static auto* factory = RE::IFormFactory::GetConcreteFormFactoryByType<RE::SpellItem>();
@@ -316,7 +279,20 @@ namespace Maint
 		spdlog::info("Debuffify({}, 0x{:08X}~{})", base->GetName(), file ? base->GetLocalFormID() : base->GetFormID(), fileStr);
 
 		auto* out = factory->Create();
-		out->SetFormID(FormsRepository::Get().NextFormID(), false);
+
+		auto& forms = Allocator::Get();
+
+		// Allocate FormID (specific or automatic)
+		std::optional<RE::FormID> allocatedFormID = aFormID ? forms.AllocateSpecificFormID(*aFormID) : forms.AllocateFormID();
+
+		if (!allocatedFormID) {
+			logger::error(
+				"CreateDebuffSpell() - Failed to allocate FormID (free left: {})",
+				forms.GetFreeFormIDCount());
+			return nullptr;
+		}
+
+		out->SetFormID(*allocatedFormID, false);
 
 		out->fullName = std::format("Maintained {}", base->GetFullName());
 		out->data = RE::SpellItem::Data{ tmpl->data };
@@ -333,6 +309,209 @@ namespace Maint
 		out->effects.back()->effectItem.magnitude = magnitude;
 
 		return out;
+	}
+
+	// ----------------------------
+	// Construction / singleton
+	// ----------------------------
+
+	Allocator& Allocator::Get()
+	{
+		static Allocator instance;
+		return instance;
+	}
+
+	// ----------------------------
+	// Allocation interface
+	// ----------------------------
+
+	std::optional<RE::FormID> Allocator::AllocateFormID()
+	{
+		if (_allocatedMask == FULL_MASK) {
+			logger::error("FORMS::AllocateFormID() - No free FormIDs available");
+			return std::nullopt;
+		}
+
+		const std::uint32_t index = FindFirstFreeIndex(_allocatedMask);
+		SetIndexAllocated(index);
+		return MakeFullFormID(IndexToLocalID(index));
+	}
+
+	std::optional<RE::FormID> Allocator::AllocateSpecificFormID(RE::FormID fullFormID)
+	{
+		if (!IsInManagedRange(fullFormID)) {
+			logger::error(
+				"Allocator::AllocateSpecificFormID() - FormID 0x{:08X} out of range",
+				fullFormID);
+			return std::nullopt;
+		}
+
+		if (IsAllocated(fullFormID)) {
+			logger::warn(
+				"Allocator::AllocateSpecificFormID() - FormID 0x{:08X} already allocated",
+				fullFormID);
+			return std::nullopt;
+		}
+
+		const std::uint32_t index =
+			LocalIDToIndex(ExtractLocalID(fullFormID));
+
+		SetIndexAllocated(index);
+
+		logger::debug(
+			"Allocator::AllocateSpecificFormID() - Allocated exact FormID 0x{:08X} (index={})",
+			fullFormID,
+			index);
+
+		return fullFormID;
+	}
+
+	void Allocator::FreeFormID(RE::FormID fullFormID)
+	{
+		if (!IsAllocated(fullFormID)) {
+			return;
+		}
+
+		const std::uint32_t index =
+			LocalIDToIndex(ExtractLocalID(fullFormID));
+
+		ClearIndexAllocated(index);
+	}
+
+	void Allocator::ReconcileWithCache()
+	{
+		std::uint64_t referencedMask = 0;
+
+		const auto& map = MaintainedRegistry::Get().map();
+
+		for (const auto& [_, pair] : map) {
+			if (pair.infinite) {
+				MarkReferenced(referencedMask, pair.infinite->GetFormID());
+			}
+			if (pair.debuff) {
+				MarkReferenced(referencedMask, pair.debuff->GetFormID());
+			}
+		}
+
+		const std::uint64_t staleMask = _allocatedMask & ~referencedMask;
+
+		if (staleMask == 0) {
+			return;
+		}
+
+		for (std::uint32_t index = 0; index < TOTAL_IDS; ++index) {
+			const std::uint64_t bit = BitForIndex(index);
+			if ((staleMask & bit) == 0) {
+				continue;
+			}
+
+			const RE::FormID fullFormID =
+				MakeFullFormID(IndexToLocalID(index));
+
+			logger::info(
+				"FORMS::ReconcileWithCache() - Freeing stale FormID 0x{:08X}",
+				fullFormID);
+
+			FreeFormID(fullFormID);
+		}
+	}
+
+	bool Allocator::IsAllocated(RE::FormID fullFormID) const
+	{
+		if (!IsInManagedRange(fullFormID)) {
+			return false;
+		}
+
+		return IsIndexAllocated(
+			LocalIDToIndex(ExtractLocalID(fullFormID)));
+	}
+
+	std::size_t Allocator::GetFreeFormIDCount() const
+	{
+		return TOTAL_IDS - std::popcount(_allocatedMask);
+	}
+
+	void Allocator::Clear()
+	{
+		if (_allocatedMask != 0) {
+			logger::info(
+				"Allocator::Clear() - Releasing {} FormIDs",
+				std::popcount(_allocatedMask));
+		}
+
+		_allocatedMask = 0;
+	}
+
+	// ----------------------------
+	// Bitmask helpers
+	// ----------------------------
+
+	std::uint32_t Allocator::FindFirstFreeIndex(std::uint64_t mask)
+	{
+		return static_cast<std::uint32_t>(
+			std::countr_zero(~mask));
+	}
+
+	constexpr std::uint64_t Allocator::BitForIndex(std::uint32_t index)
+	{
+		return (index < 64) ? (1ull << index) : 0ull;
+	}
+
+	void Allocator::SetIndexAllocated(std::uint32_t index)
+	{
+		_allocatedMask |= BitForIndex(index);
+	}
+
+	void Allocator::ClearIndexAllocated(std::uint32_t index)
+	{
+		_allocatedMask &= ~BitForIndex(index);
+	}
+
+	bool Allocator::IsIndexAllocated(std::uint32_t index) const
+	{
+		return (_allocatedMask & BitForIndex(index)) != 0;
+	}
+
+	void Allocator::MarkReferenced(std::uint64_t& mask, RE::FormID fullFormID) const
+	{
+		if (!IsInManagedRange(fullFormID)) {
+			return;
+		}
+
+		const std::uint32_t index =
+			LocalIDToIndex(ExtractLocalID(fullFormID));
+
+		mask |= BitForIndex(index);
+	}
+
+	// ----------------------------
+	// ID mapping
+	// ----------------------------
+
+	constexpr RE::FormID Allocator::IndexToLocalID(std::uint32_t index)
+	{
+		return index + MIN_LOCAL_ID;
+	}
+
+	constexpr std::uint32_t Allocator::LocalIDToIndex(RE::FormID localID)
+	{
+		return localID - MIN_LOCAL_ID;
+	}
+
+	constexpr RE::FormID Allocator::MakeFullFormID(RE::FormID localID)
+	{
+		return FORMID_OFFSET_BASE + localID;
+	}
+
+	constexpr RE::FormID Allocator::ExtractLocalID(RE::FormID fullFormID)
+	{
+		return fullFormID - FORMID_OFFSET_BASE;
+	}
+
+	constexpr bool Allocator::IsInManagedRange(RE::FormID fullFormID)
+	{
+		const RE::FormID localID = ExtractLocalID(fullFormID);
+		return localID >= MIN_LOCAL_ID && localID <= MAX_LOCAL_ID;
 	}
 
 	// ================= MaintainedEffectsCache ====================================
@@ -366,7 +545,7 @@ namespace Maint
 	{
 		const auto count = std::ranges::distance(actor->AsMagicTarget()->GetActiveEffectList()->begin(),
 			actor->AsMagicTarget()->GetActiveEffectList()->end());
-		if (count != cache_.size()) {
+		if (static_cast<std::size_t>(count) != cache_.size()) {
 			rebuild(actor);
 		}
 		return cache_;
@@ -382,6 +561,14 @@ namespace Maint
 		if (!s || !caster)
 			return false;
 
+		const std::size_t freeIDs = Allocator::Get().GetFreeFormIDCount();
+
+		if (freeIDs < 2) {
+			logger::info(
+				"Not enough free FormIDs to maintain spell ({} free)",
+				freeIDs);
+			return false;
+		}
 		if (s->As<RE::ScrollItem>()) {
 			spdlog::info("Spell is Scroll");
 			return false;
@@ -591,6 +778,7 @@ namespace Maint
 		}
 		FormsRepository::Get().FlstMaintainedSpellToggle->ClearData();
 		MaintainedRegistry::Get().clear();
+		Allocator::Get().Clear();
 		UpkeepSupervisor::ClearCache();
 	}
 
@@ -783,6 +971,9 @@ namespace Maint
 				if (actor->HasSpell(d)) {
 					actor->RemoveSpell(m);
 					actor->RemoveSpell(d);
+
+					Allocator::Get().FreeFormID(m->GetFormID());
+					Allocator::Get().FreeFormID(d->GetFormID());
 					if (Config::InstantDispel) {
 						static auto handle = actor->GetHandle();
 						actor->AsMagicTarget()->DispelEffect(base, handle);
@@ -845,71 +1036,507 @@ namespace Maint
 			->CastSpellImmediate(mindCrush, false, actor, 1.0, true, totalDrain, nullptr);
 	}
 
-	// ================= SaveMappingService ========================================
+	// ================= SaveLoadingService ========================================
 
-	void SaveMappingService::Load(const std::string& identifier)
+	namespace SaveLoadingService
 	{
-		spdlog::info("LoadSavegameMapping({})", identifier);
-
-		constexpr auto parseKey = [](const std::string& s) -> std::pair<std::string, RE::FormID> {
-			auto t = s.find('~');
-			if (t == std::string::npos)
-				return { {}, 0 };
-			return { s.substr(0, t), lexical_cast_hex_to_formid(s.substr(t + 1)) };
+		struct MaintainedSpellEntry
+		{
+			RE::FormID baseLocalFormID;
+			RE::FormID maintainedSpellID;
+			RE::FormID debuffSpellID;
 		};
-		constexpr auto parseVals = [](const std::string& s) -> std::pair<RE::FormID, RE::FormID> {
-			auto t = s.find('~');
-			if (t == std::string::npos)
-				return { 0, 0 };
-			try {
-				return { lexical_cast_hex_to_formid(s.substr(0, t)),
-					lexical_cast_hex_to_formid(s.substr(t + 1)) };
-			} catch (...) {
-				return { 0, 0 };
-			}
+		static_assert(std::is_trivially_copyable_v<MaintainedSpellEntry>);
+
+		constexpr char MTMG_MAGIC[32] = {
+			'M', 'A', 'I', 'N', 'T', 'A', 'I', 'N', 'E', 'D',
+			'M', 'A', 'G', 'I', 'C',
+			'N', 'E', 'W', 'G', 'E', 'N',
+			'C', 'O', 'O', 'K', 'I', 'E',
+			'S', 'A', 'V', 'E', ':'
 		};
+		// "MAINTAINEDMAGICNEWGENCOOKIESAVE:"
+		constexpr std::size_t MTMG_MAGIC_LEN = sizeof(MTMG_MAGIC) - 1;
 
-		const auto* ini = Config::ConfigBase::GetSingleton(Config::MAP_FILE);
-		auto section = std::format("MAP:{}", identifier);
+		struct MaintainedSpellHeader
+		{
+			char magic_cookie[32];     // fixed identifier
+			std::uint32_t checksum;    // checksum of fields AFTER this
+			std::uint8_t entryCount;   // 0–32 only
+			std::uint8_t reserved[7];  // padding / future-proofing
+		};
+		static_assert(std::is_trivially_copyable_v<MaintainedSpellHeader>);
 
-		for (const auto& [k, v] : ini->GetAllKeyValuePairs(section)) {
-			const auto& [plugin, formid] = parseKey(k);
-			const auto& [maintSpellFID, debuffFID] = parseVals(v);
+		static constexpr std::uint32_t kHeaderSalt = 0x4D41494E;  // 'MAIN'
+		static std::uint32_t ComputeHeaderChecksum(const MaintainedSpellHeader& h)
+		{
+			std::uint32_t sum = 5381 ^ kHeaderSalt;
 
-			RE::SpellItem* base = plugin != "VIRTUAL" ? RE::TESDataHandler::GetSingleton()->LookupForm<RE::SpellItem>(formid, plugin) : RE::TESForm::LookupByID<RE::SpellItem>(formid);
+			// entryCount
+			sum = ((sum << 5) + sum) ^ h.entryCount;
 
-			if (!base) {
-				spdlog::error("Base Spell {}~{:08X} not found", plugin, formid);
-				continue;
+			// reserved bytes (must be zero)
+			for (std::uint8_t b : h.reserved) {
+				sum = ((sum << 5) + sum) ^ b;
 			}
 
-			auto* inf = SpellFactory::CreateInfiniteFrom(base);
-			auto* debuff = SpellFactory::CreateDebuffFrom(base, 0.0f);
-			if (maintSpellFID != 0x0)
-				inf->SetFormID(maintSpellFID, false);
-			if (debuffFID != 0x0)
-				debuff->SetFormID(debuffFID, false);
-
-			MaintainedRegistry::Get().insert(base, Domain::MaintainedPair{ inf, debuff });
+			return sum;
 		}
-	}
 
-	void SaveMappingService::Store(const std::string& saveIdentifierWithExt)
-	{
-		spdlog::info("StoreSavegameMapping({})", saveIdentifierWithExt);
-		static auto* ini = Config::ConfigBase::GetSingleton(Config::MAP_FILE);
+		inline bool IsValidHeader(const MaintainedSpellHeader& h)
+		{
+			// entryCount is tightly bounded
+			if (h.entryCount > 32) {
+				return false;
+			}
 
-		const auto section = std::format("MAP:{}", saveIdentifierWithExt);
-		ini->DeleteSection(section);
+			// reserved bytes must be zero
+			for (std::uint8_t b : h.reserved) {
+				if (b != 0) {
+					return false;
+				}
+			}
 
-		for (const auto& [base, pair] : MaintainedRegistry::Get().map()) {
-			const auto* file = base->GetFile(0);
-			const auto fname = file ? file->GetFilename() : "VIRTUAL"sv;
-			const auto key = std::format("{}~0x{:08X}", fname, file ? base->GetLocalFormID() : base->GetFormID());
-			const auto value = std::format("0x{:08X}~0x{:08X}", pair.infinite->GetFormID(), pair.debuff->GetFormID());
-			ini->SetValue(section, key, value, std::format("# {}", base->GetName()));
+			// checksum must match
+			if (h.checksum != ComputeHeaderChecksum(h)) {
+				return false;
+			}
+
+			return true;
 		}
-		ini->Save();
+
+		void ParseMaintainedMagicBlob(const std::vector<std::byte>& buffer, std::size_t offset)
+		{
+			const std::size_t size = buffer.size();
+			std::size_t cursor = offset;
+
+			auto require = [&](std::size_t n) {
+				return cursor + n <= size;
+			};
+
+			// --------------------------------
+			// Header
+			// --------------------------------
+			MaintainedSpellHeader hdr{};
+			std::memcpy(&hdr, buffer.data() + cursor, sizeof(hdr));
+			cursor += sizeof(hdr);
+
+			logger::info(
+				"MaintainedMagicNG header accepted: entries={}",
+				hdr.entryCount);
+
+			const auto& dataHandler = RE::TESDataHandler::GetSingleton();
+			if (!dataHandler) {
+				logger::error("\tFailed to fetch TESDataHandler!");
+				return;
+			}
+
+			// --------------------------------
+			// Entries
+			// --------------------------------
+			for (std::size_t i = 0; i < hdr.entryCount; ++i) {
+				// filename length
+				std::uint32_t nameLen;
+				std::memcpy(&nameLen, buffer.data() + cursor, sizeof(nameLen));
+				cursor += sizeof(nameLen);
+
+				std::string filename(nameLen, '\0');
+				std::memcpy(filename.data(), buffer.data() + cursor, nameLen);
+				cursor += nameLen;
+
+				// entry payload
+				MaintainedSpellEntry entry{};
+				std::memcpy(&entry, buffer.data() + cursor, sizeof(entry));
+				cursor += sizeof(entry);
+
+				logger::debug(
+					"Entry [{}]: file='{}', baseID=0x{:08X}, maint=0x{:08X}, debuff=0x{:08X}",
+					i,
+					filename,
+					entry.baseLocalFormID,
+					entry.maintainedSpellID,
+					entry.debuffSpellID);
+
+				// --------------------------------
+				// Resolve base spell (INI-equivalent)
+				// --------------------------------
+				RE::SpellItem* baseSpell = nullptr;
+
+				if (filename != "VIRTUAL") {
+					// file-backed: baseLocalFormID is a LOCAL ID
+					baseSpell =
+						dataHandler->LookupForm<RE::SpellItem>(
+							entry.baseLocalFormID,
+							filename);
+				} else {
+					// virtual: baseLocalFormID is actually a FULL FormID
+					baseSpell =
+						RE::TESForm::LookupByID<RE::SpellItem>(
+							entry.baseLocalFormID);
+				}
+
+				if (!baseSpell) {
+					logger::warn(
+						"Skipping entry {}: unable to resolve base spell {} 0x{:08X}",
+						i,
+						filename,
+						entry.baseLocalFormID);
+					continue;
+				}
+
+				// --------------------------------
+				// Create maintained spell
+				// --------------------------------
+				const auto& infSpell =
+					Maint::SpellFactory::CreateInfiniteFrom(
+						baseSpell,
+						entry.maintainedSpellID != 0x0 ? std::optional<RE::FormID>(entry.maintainedSpellID) : std::nullopt);
+
+				if (!infSpell) {
+					logger::error(
+						"\tFailed to create Maintained Spell: {}",
+						baseSpell->GetName());
+					return;
+				}
+
+				// --------------------------------
+				// Create debuff spell
+				// --------------------------------
+				const auto& debuffSpell =
+					Maint::SpellFactory::CreateDebuffFrom(
+						baseSpell,
+						0.0f,
+						entry.debuffSpellID != 0x0 ? std::optional<RE::FormID>(entry.debuffSpellID) : std::nullopt);
+
+				if (!debuffSpell) {
+					logger::error(
+						"\tFailed to create Debuff Spell: {}",
+						baseSpell->GetName());
+					return;
+				}
+
+				// --------------------------------
+				// Insert into cache
+				// --------------------------------
+				MaintainedRegistry::Get().insert(
+					baseSpell,
+					{ infSpell, debuffSpell });
+			}
+
+			logger::info(
+				"MaintainedMagicNG parse complete ({} entries)",
+				hdr.entryCount);
+		}
+
+		void ShowCenteredOKBox(const std::string& text)
+		{
+			SKSE::GetTaskInterface()->AddTask([text]() {
+				// Must be on main thread and in-game
+				if (!RE::PlayerCharacter::GetSingleton()) {
+					return;
+				}
+
+				auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+				if (!vm) {
+					return;
+				}
+
+				RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
+
+				vm->DispatchStaticCall(
+					"Debug",
+					"MessageBox",
+					RE::MakeFunctionArguments(RE::BSFixedString(text.c_str())),
+					callback);
+			});
+		}
+
+		std::filesystem::path MakeCoSaveName(const char* essName)
+		{
+			std::filesystem::path p{ essName };
+			p.replace_extension(".skse");
+			return p;
+		}
+
+		std::filesystem::path GetSaveRoot()
+		{
+			if (Config::SAVES_PATH != "disabled") {
+				std::filesystem::path overridePath = Config::SAVES_PATH;
+
+				logger::info(
+					"Using user-specified saves path override = '{}'",
+					overridePath.string());
+
+				if (!std::filesystem::exists(overridePath)) {
+					logger::error(
+						"Configured SavesPath does not exist: '{}'",
+						overridePath.string());
+
+					std::string message =
+						"MaintainedMagicNG:\n"
+						"The configured SavesPath does not exist:\n\n" +
+						overridePath.string();
+
+					ShowCenteredOKBox(message);
+					return {};
+				}
+
+				if (!std::filesystem::is_directory(overridePath)) {
+					logger::error(
+						"Configured SavesPath is not a directory: '{}'",
+						overridePath.string());
+
+					std::string message =
+						"MaintainedMagicNG:\n"
+						"The configured SavesPath is not a directory:\n\n" +
+						overridePath.string();
+
+					ShowCenteredOKBox(message);
+					return {};
+				}
+
+				return overridePath;
+			}
+
+			char* userProfile = nullptr;
+			size_t len = 0;
+
+			if (_dupenv_s(&userProfile, &len, "USERPROFILE") != 0 || !userProfile) {
+				logger::error("Failed to resolve USERPROFILE");
+				return {};
+			}
+
+			std::filesystem::path documents = userProfile;
+			free(userProfile);
+
+			// 2) Resolve game folder name
+			constexpr const char* gameFolder = "Skyrim Special Edition";
+
+			std::filesystem::path myGames =
+				documents / "Documents" / "My Games" / gameFolder;
+
+			logger::debug("Resolved My Games path = '{}'", myGames.string());
+
+			// 3) Get sLocalSavePath from engine INI
+			const auto ini = RE::INISettingCollection::GetSingleton();
+			if (!ini) {
+				logger::error("INISettingCollection singleton not available");
+				return myGames / "saves";
+			}
+
+			const auto setting = ini->GetSetting("sLocalSavePath:General");
+
+			std::string localSavePath = "saves\\";
+
+			if (setting && setting->GetType() == RE::Setting::Type::kString) {
+				localSavePath = setting->GetString();
+			}
+
+			logger::debug("sLocalSavePath (engine) = '{}'", localSavePath);
+
+			// 3.5) Detect MO2 save redirection (ONLY if no override)
+			if (_stricmp(localSavePath.c_str(), "__MO_Saves\\") == 0 ||
+				_stricmp(localSavePath.c_str(), "__MO_Saves/") == 0) {
+				logger::error(
+					"Detected MO2 save redirection (__MO_Saves) with no override.");
+
+				std::string message =
+					std::string(
+						"MaintainedMagicNG:\n"
+						"MO2 profile-local saves detected.\n"
+						"This mod cannot access co-saves automatically.\n\n"
+						"Please specify the full path to your real saves folder in:\n\n") +
+					Config::CONFIG_FILE;
+
+				ShowCenteredOKBox(message);
+			}
+
+			// 4) Resolve final logical save root
+			std::filesystem::path resolved = myGames / localSavePath;
+
+			logger::debug(
+				"Resolved logical save root = '{}'",
+				resolved.string());
+
+			return resolved;
+		}
+
+		std::optional<std::size_t> FindMagicCookie(const std::vector<std::byte>& data)
+		{
+			for (std::size_t i = 0;
+				i + sizeof(MaintainedSpellHeader) <= data.size();
+				++i) {
+				if (std::memcmp(
+						data.data() + i,
+						MTMG_MAGIC,
+						MTMG_MAGIC_LEN) != 0) {
+					continue;
+				}
+
+				const auto* header =
+					reinterpret_cast<const MaintainedSpellHeader*>(
+						data.data() + i);
+
+				if (!IsValidHeader(*header)) {
+					logger::warn(
+						"Magic cookie match rejected (invalid header at offset {})",
+						i);
+					continue;
+				}
+
+				logger::debug(
+					"Valid MaintainedMagic header found at offset {} "
+					"(entryCount={}, checksum=0x{:08X})",
+					i,
+					header->entryCount,
+					header->checksum);
+
+				return i;
+			}
+
+			return std::nullopt;
+		}
+
+		std::mutex mtx;
+
+		void OnPreLoadGame_ScanCosave(const char* saveName)
+		{
+			std::unique_lock<std::mutex> lock(mtx);
+
+			const auto saveRoot = GetSaveRoot();
+			const auto cosaveName = MakeCoSaveName(saveName);
+			const auto cosavePath = saveRoot / cosaveName;
+
+			logger::debug(
+				"Attempting to open SKSE co-save '{}'",
+				cosavePath.string());
+
+			std::ifstream file(cosavePath, std::ios::binary | std::ios::ate);
+			if (!file) {
+				logger::info(
+					"No SKSE co-save found at '{}'",
+					cosavePath.string());
+
+				std::string message =
+					"MaintainedMagicNG:\n"
+					"Unable to find SKSE co-save\n"
+					"Maintained spell will be broken and save is bricked!\n"
+					"Quit game and fix before continuing\n\n" +
+					cosavePath.string();
+
+				ShowCenteredOKBox(message);
+				return;
+			}
+
+			const std::streamsize size = file.tellg();
+			if (size <= 0) {
+				logger::warn("SKSE co-save is empty");
+				return;
+			}
+
+			file.seekg(0, std::ios::beg);
+
+			std::vector<std::byte> buffer(static_cast<std::size_t>(size));
+			if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
+				logger::error("Failed to read SKSE co-save");
+				return;
+			}
+
+			logger::debug("Read {} bytes from SKSE co-save", buffer.size());
+
+			const auto found = FindMagicCookie(buffer);
+			if (!found) {
+				logger::warn("MaintainedMagicNG header not found in SKSE co-save");
+				return;
+			}
+
+			logger::info(
+				"MaintainedMagicNG valid header found at offset {}",
+				*found);
+
+			ParseMaintainedMagicBlob(buffer, *found);
+		}
+
+		inline const auto MaintainedMagicRecord = _byteswap_ulong('MTMG');
+		void OnGameSaved(SKSE::SerializationInterface* serde)
+		{
+			std::unique_lock<std::mutex> lock(mtx);
+
+			logger::info("Saving data to SKSE co-save...");
+
+			const auto& map = MaintainedRegistry::Get().map();
+
+			if (map.empty()) {
+				logger::info("No spells being maintained; skipping save.");
+				return;
+			}
+
+			if (map.size() > 32) {
+				logger::error(
+					"Too many maintained spells to save ({} > 32). Aborting save.",
+					map.size());
+				return;
+			}
+
+			if (!serde->OpenRecord(MaintainedMagicRecord, 0)) {
+				logger::error("Failed to open MTMG record for writing.");
+				return;
+			}
+
+			// -------------------------------------------------
+			// Header
+			// -------------------------------------------------
+			MaintainedSpellHeader header{};
+			std::memcpy(header.magic_cookie, MTMG_MAGIC, sizeof(header.magic_cookie));
+
+			header.entryCount = static_cast<std::uint8_t>(map.size());
+			std::memset(header.reserved, 0, sizeof(header.reserved));
+			header.checksum = ComputeHeaderChecksum(header);
+
+			serde->WriteRecordData(&header, sizeof(header));
+
+			// -------------------------------------------------
+			// Entries (Store()-equivalent semantics)
+			// -------------------------------------------------
+			for (const auto& [baseSpell, maintData] : map) {
+				const auto& [maintSpell, debuffSpell] = maintData;
+
+				const auto* file = baseSpell->GetFile(0);
+
+				// Match Store(): filename or "VIRTUAL"
+				const std::string_view fileName = file ? file->GetFilename() : "VIRTUAL"sv;
+
+				// Write filename length + bytes
+				const std::uint32_t nameLen = static_cast<std::uint32_t>(fileName.size());
+
+				serde->WriteRecordData(&nameLen, sizeof(nameLen));
+				if (nameLen > 0) {
+					serde->WriteRecordData(fileName.data(), nameLen);
+				}
+
+				// 🔑 Match Store(): base ID depends on file-backed vs virtual
+				const RE::FormID baseID = file ? baseSpell->GetLocalFormID() : baseSpell->GetFormID();
+
+				MaintainedSpellEntry entry{
+					.baseLocalFormID = baseID,  // semantic rename aside
+					.maintainedSpellID = maintSpell->GetFormID(),
+					.debuffSpellID = debuffSpell->GetFormID()
+				};
+
+				serde->WriteRecordData(&entry, sizeof(entry));
+
+				logger::debug(
+					"Entry written: file='{}', baseID=0x{:08X}, maint=0x{:08X}, debuff=0x{:08X}",
+					fileName,
+					baseID,
+					entry.maintainedSpellID,
+					entry.debuffSpellID);
+			}
+
+			logger::info(
+				"SKSE co-save write complete ({} entries).",
+				header.entryCount);
+		}
 	}
 
 	// ================= UpdatePCHook ==============================================
@@ -942,6 +1569,7 @@ namespace Maint
 		if (TimerExperienceAward >= 300) {
 			ExperienceService::AwardPlayerExperience(pc);
 			TimerExperienceAward = 0.0f;
+			Allocator::Get().ReconcileWithCache();  // let's also take a moment to reconcile the Allocator incase it lost track of something somehow
 		}
 	}
 
@@ -990,7 +1618,6 @@ namespace Maint
 
 	static void ReadConfiguration()
 	{
-		spdlog::info("Maintained Map @ {}", Config::MAP_FILE);
 		spdlog::info("Maintained Config @ {}", Config::CONFIG_FILE);
 
 		static auto* ini = Config::ConfigBase::GetSingleton(Config::CONFIG_FILE);
@@ -1010,6 +1637,17 @@ namespace Maint
 			spdlog::set_level(it->second);
 		else
 			spdlog::set_level(spdlog::level::debug);
+
+		if (!ini->HasKey("CONFIG", "SavesPath")) {
+			ini->SetValue("CONFIG", "SavesPath", "disabled", "# Options: disabled or enter the full path to your real saves folder");
+		}
+
+		auto const value = ini->GetValue("CONFIG", "SavesPath");
+		if (!value.empty()) {
+			Config::SAVES_PATH = value;
+		} else {
+			Config::SAVES_PATH = "disabled";
+		}
 
 		if (!ini->HasKey("CONFIG", "SilencePersistentSpellFX")) {
 			ini->SetBoolValue("CONFIG", "SilencePersistentSpellFX", false,
@@ -1071,7 +1709,7 @@ namespace Maint
 
 		ini->Save();
 	}
-
+	/*
 	static void DoDatabaseMaintenance(const std::string current)
 	{
 		if (!Config::CleanupMissingSaves)
@@ -1106,7 +1744,7 @@ namespace Maint
 		}
 		ini->Save();
 	}
-
+	*/
 	void OnInit(SKSE::MessagingInterface::Message* const msg)
 	{
 		switch (msg->type) {
@@ -1115,42 +1753,40 @@ namespace Maint
 			break;
 
 		case SKSE::MessagingInterface::kPreLoadGame:
-		case SKSE::MessagingInterface::kNewGame:
 			if (msg->dataLen > 0) {
 				auto* bytes = static_cast<char*>(msg->data);
 				std::string saveFile(bytes, msg->dataLen);
 				spdlog::info("Load : {}", saveFile);
 
 				MaintenanceOrchestrator::PurgeAll();
-				FormsRepository::Get().LoadOffset(Config::ConfigBase::GetSingleton(Config::MAP_FILE), saveFile);
-				SaveMappingService::Load(saveFile);
-				DoDatabaseMaintenance(saveFile);
+				SaveLoadingService::OnPreLoadGame_ScanCosave(saveFile.c_str());
 			}
 			break;
-
+		case SKSE::MessagingInterface::kNewGame:
+			MaintenanceOrchestrator::PurgeAll();
+			break;
 		case SKSE::MessagingInterface::kPostLoadGame:
 			MaintenanceOrchestrator::BuildActiveSpellsCache();
 			break;
-
-		case SKSE::MessagingInterface::kSaveGame:
-			if (msg->dataLen > 0) {
-				auto* bytes = static_cast<char*>(msg->data);
-				std::string saveFile(bytes, msg->dataLen);
-				std::string saveWithExt = std::format("{}.ess", saveFile);
-				spdlog::info("Save : {}", saveWithExt);
-				SaveMappingService::Store(saveWithExt);
-			}
-			break;
-
 		default:
 			break;
 		}
+	}
+
+	void InitializeSerialization()
+	{
+		logger::debug("Initializing cosave serialization...");
+		auto* serde = SKSE::GetSerializationInterface();
+		serde->SetUniqueID(SaveLoadingService::MaintainedMagicRecord);
+		serde->SetSaveCallback(SaveLoadingService::OnGameSaved);
+		logger::debug("Cosave serialization initialized.");
 	}
 
 	bool Load()
 	{
 		SpellCastEventHandler::Install();
 		UpdatePCHook::Install();
+		InitializeSerialization();
 		return true;
 	}
 
