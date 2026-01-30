@@ -340,7 +340,6 @@ namespace Maint
 	void MaintainedEffectsCache::rebuild(RE::Actor* actor)
 	{
 		cache_.clear();
-		lastCount_ = 0;
 
 		static const auto& mmDebufEffect = FormsRepository::Get().SpelMagickaDebuffTemplate->effects.front();
 		const auto& effList = actor->AsMagicTarget()->GetActiveEffectList();
@@ -367,11 +366,13 @@ namespace Maint
 	{
 		const auto count = std::ranges::distance(actor->AsMagicTarget()->GetActiveEffectList()->begin(),
 			actor->AsMagicTarget()->GetActiveEffectList()->end());
-		if (count != lastCount_) {
+		if (count != cache_.size()) {
 			rebuild(actor);
-			lastCount_ = count;
 		}
 		return cache_;
+	}
+	void MaintainedEffectsCache::Clear() {
+		cache_.clear();
 	}
 
 	// ================= Policy / Calculations =====================================
@@ -590,6 +591,7 @@ namespace Maint
 		}
 		FormsRepository::Get().FlstMaintainedSpellToggle->ClearData();
 		MaintainedRegistry::Get().clear();
+		UpkeepSupervisor::ClearCache();
 	}
 
 	void MaintenanceOrchestrator::BuildActiveSpellsCache()
@@ -622,7 +624,9 @@ namespace Maint
 	}
 
 	// ================= UpkeepSupervisor ==========================================
-
+	void UpkeepSupervisor::ClearCache(){
+		cache_.Clear();
+	}
 	void UpkeepSupervisor::ForceMaintainedSpellUpdate(RE::Actor* const& actor)
 	{
 		if (MaintainedRegistry::Get().empty())
@@ -633,8 +637,6 @@ namespace Maint
 		static double acc{ 0.0 };
 		static uint32_t cnt{ 0 };
 		const auto start = std::chrono::high_resolution_clock::now();
-
-		static MaintainedEffectsCache cache;
 
 		// Apply deferred dispels (bound weapon hand state)
 		MaintainedRegistry::Get().forEachDeferred([&](RE::SpellItem* maintained, RE::SpellItem* base, bool& erase) {
@@ -702,7 +704,7 @@ namespace Maint
 				}
 			}
 
-			const auto& spell2ae = cache.GetFor(actor);
+			const auto& spell2ae = cache_.GetFor(actor);
 			const auto it = spell2ae.find(m);
 			if (it == spell2ae.end()) {
 				spdlog::debug("{} not found on Actor", m->GetName());

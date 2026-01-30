@@ -102,7 +102,7 @@ namespace Maint
 			bool HasSection(const std::string& section) const;
 
 			const std::vector<std::pair<std::string, std::string>> GetAllKeyValuePairs(const std::string& section) const;
-			const void GetAllSections(std::list<CSimpleIniA::Entry>* const &out) const;
+			const void GetAllSections(std::list<CSimpleIniA::Entry>* const& out) const;
 
 			void DeleteSection(const std::string& section);
 			void DeleteKey(const std::string& section, const std::string& key);
@@ -252,6 +252,7 @@ namespace Maint
 	public:
 		const std::unordered_map<RE::SpellItem*, std::vector<RE::ActiveEffect*>>&
 			GetFor(RE::Actor* actor);
+		void Clear();
 
 	private:
 		std::unordered_map<RE::SpellItem*, std::vector<RE::ActiveEffect*>> cache_{};
@@ -288,6 +289,9 @@ namespace Maint
 	public:
 		static void ForceMaintainedSpellUpdate(RE::Actor* const& actor);
 		static void CheckUpkeepValidity(RE::Actor* const& actor);
+		static void ClearCache();
+	private:
+		static inline MaintainedEffectsCache cache_;
 	};
 
 	class MaintenanceOrchestrator
