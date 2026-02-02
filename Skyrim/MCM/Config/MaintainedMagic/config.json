@@ -1,0 +1,1102 @@
+{
+  "modName": "MaintainedMagic",
+  "displayName": "Maintained Magic NG",
+  "minMcmVersion": 11,
+  "cursorFillMode": "topToBottom",
+
+  "pages": [
+    {
+      "pageDisplayName": "General",
+      "cursorFillMode": "topToBottom",
+      "content": [
+        {
+          "text": "General Settings",
+          "type": "header"
+        },
+        {
+          "id": "bAllowBoundWeapons:General",
+          "text": "Allow Maintained Bound Weapons",
+          "type": "toggle",
+          "help": "Allows proper bound weapon spells to be maintained.\n\nBound weapons must be re-summoned after unsheathing, and maintenance will break if the weapon or its spell is removed from your hand. Script-based bound items are not supported.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+        {
+          "id": "bInstantDispel:General",
+          "text": "Instant Dispel on Recast",
+          "type": "toggle",
+          "help": "When enabled, recasting a maintained spell immediately dispels its maintained effects instead of applying the spell with its normal duration.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+
+        { "type": "empty" },
+
+        {
+          "text": "Upkeep Cost Scaling",
+          "type": "header"
+        },
+        {
+          "id": "iCostBaseDuration:Costs",
+          "text": "Neutral Duration (seconds)",
+          "type": "slider",
+          "help": "Reference duration used for upkeep cost scaling.\n\nIf a maintained spell’s duration equals this value, upkeep equals its base magicka cost.",
+          "valueOptions": {
+            "min": 0,
+            "max": 300,
+            "step": 15,
+            "sourceType": "ModSettingInt"
+          }
+        },
+        {
+          "id": "fUpkeepDurationExponent:Costs",
+          "text": "Upkeep Duration Exponent",
+          "type": "slider",
+          "help": "Controls how aggressively upkeep cost scales with duration.\n\nLOWER values increase upkeep cost.\nHIGHER values reduce upkeep cost.\n\nDoes not retroactively affect already maintained spells.",
+          "valueOptions": {
+            "min": 0.1,
+            "max": 0.8,
+            "step": 0.05,
+            "formatString": "{2}",
+            "sourceType": "ModSettingFloat"
+          }
+        },
+
+        { "type": "empty" },
+
+        {
+          "text": "Experience Settings",
+          "type": "header"
+        },
+        {
+          "id": "fMaintainedExpMultiplier:Experience",
+          "text": "Maintained Spell Experience Multiplier",
+          "type": "slider",
+          "help": "Passive experience gained from maintained spells.\n\nSet to 0 to disable.",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 5.0,
+            "step": 0.1,
+            "formatString": "{1}",
+            "sourceType": "ModSettingFloat"
+          }
+        }
+      ]
+    },
+
+    {
+      "pageDisplayName": "Maintained Spells",
+      "cursorFillMode": "leftToRight",
+      "content": [
+        {
+          "text": "Maintained Spell Visual Effects Toggle",
+          "type": "header"
+        },
+
+        {
+          "id": "bDoSilenceFX:General",
+          "text": "Silence ALL Maintained Spell FX",
+          "type": "toggle",
+          "help": "When enabled, ALL maintained spell visual effects are disabled.\n\nIf disabled, you may selectively disable FX per spell below.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 1,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_1"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 1,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_1"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 1,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_1"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 2,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_2"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 2,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_2"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 2,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_2"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 3,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_3"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 3,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_3"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 3,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_3"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 4,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_4"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 4,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_4"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 4,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_4"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 5,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_5"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 5,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_5"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 5,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_5"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 6,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_6"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 6,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_6"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 6,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_6"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 7,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_7"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 7,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_7"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 7,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_7"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 8,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_8"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 8,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_8"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 8,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_8"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 9,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_9"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 9,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_9"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 9,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_9"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 10,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_10"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 10,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_10"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 10,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_10"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 11,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_11"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 11,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_11"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 11,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_11"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 12,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_12"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 12,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_12"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 12,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_12"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 13,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_13"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 13,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_13"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 13,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_13"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 14,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_14"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 14,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_14"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 14,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_14"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 15,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_15"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 15,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_15"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 15,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_15"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 16,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_16"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 16,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_16"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 16,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_16"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 17,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_17"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 17,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_17"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 17,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_17"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 18,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_18"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 18,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_18"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 18,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_18"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 19,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_19"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 19,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_19"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 19,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_19"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 20,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_20"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 20,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_20"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 20,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_20"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 21,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_21"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 21,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_21"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 21,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_21"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 22,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_22"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 22,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_22"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 22,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_22"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 23,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_23"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 23,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_23"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 23,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_23"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 24,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_24"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 24,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_24"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 24,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_24"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 25,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_25"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 25,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_25"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 25,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_25"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 26,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_26"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 26,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_26"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 26,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_26"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 27,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_27"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 27,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_27"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 27,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_27"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 28,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_28"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 28,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_28"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 28,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_28"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 29,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_29"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 29,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_29"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 29,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_29"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 30,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_30"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 30,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_30"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 30,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_30"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 31,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_31"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 31,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_31"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 31,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_31"
+          }
+        },
+
+        {
+          "type": "hiddenToggle",
+          "groupControl": 32,
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSlotVisible_32"
+          }
+        },
+        {
+          "type": "text",
+          "groupCondition": 32,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueString",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "sSpellName_32"
+          }
+        },
+        {
+          "text": "FX",
+          "type": "toggle",
+          "groupCondition": 32,
+          "groupBehavior": "skip",
+          "valueOptions": {
+            "sourceType": "PropertyValueBool",
+            "scriptName": "MaintainedMagicNG_MCM",
+            "propertyName": "bSpellFX_32"
+          }
+        }
+      ]
+    }
+  ]
+}
