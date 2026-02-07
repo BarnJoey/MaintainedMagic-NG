@@ -396,13 +396,15 @@ namespace Maint
 		static void UpdateConjureWatch(RE::Actor* actor);
 		static void UpdateConjureRecasts(RE::Actor* player, float deltaSeconds);
 		static bool TryRecastSummon(RE::Actor* actor, RE::SpellItem* spell);
-		static void SetEvictionTick();
+		static void SetEvictionTick(RE::Actor* actor);
 
 		static void ClearCache();
 	private:
 		static inline MaintainedEffectsCache cache_;
 
 		static inline int evictionWindowTicks_ = 0;
+
+		static inline std::unordered_set<RE::SpellItem*> evictionSnapshot_;
 	};
 
 	class MaintenanceOrchestrator
