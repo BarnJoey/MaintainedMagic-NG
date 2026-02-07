@@ -30,12 +30,14 @@ namespace Maint
 
 		inline std::string SAVES_PATH = "disabled";
 		inline bool DoSilenceFX = false;
-		inline long CostBaseDuration = 60;  // seconds, ìneutralî duration
+		inline long CostBaseDuration = 60;  // seconds, ‚Äúneutral‚Äù duration
 		inline float UpkeepDurationExponent = 0.45f;  // driven by difficulty slider
 		inline float UpkeepAsymptoteKnee = 0.4f;
 		inline bool AllowBoundWeapons = true;
 		inline float MaintainedExpMultiplier = 1.0f;
 		inline bool InstantDispel = true;
+
+		inline float ConjureRecastDelay = 20.0f;
 
 		inline float MagickaRegenPenalty = 500.0f;    // softness constant
 
@@ -130,10 +132,22 @@ namespace Maint
 			// ---- FX tracking ----
 			std::vector<SilencedEffect> silencedEffects;
 
+			// ---- Conjuration metadata ----
+			bool isConjureMinion{ false };
+
+			// ---- Recast state ----
+			float recastRemaining{ 0.0f };  // seconds; <= 0 means inactive
+			bool recastQueued{ false };
+
 			// Convenience
 			bool HasSilencedFX() const noexcept
 			{
 				return !silencedEffects.empty();
+			}
+
+			bool NeedsRecastUpdate() const noexcept
+			{
+				return isConjureMinion && recastQueued;
 			}
 		};
 
@@ -267,6 +281,8 @@ namespace Maint
 		std::unordered_map<RE::SpellItem*, Domain::MaintainedPair> map_;
 		std::set<std::pair<RE::SpellItem*, RE::SpellItem*>> deferred_;
 		std::unordered_set<std::string> silencedSpells_;
+
+		std::uint32_t LastMaxSummonCount_ = 1;
 	};
 
 	// ===== FormID Allocator ====================================================
@@ -376,9 +392,17 @@ namespace Maint
 	public:
 		static void ForceMaintainedSpellUpdate(RE::Actor* const& actor);
 		static void CheckUpkeepValidity(RE::Actor* const& actor);
+
+		static void UpdateConjureWatch(RE::Actor* actor);
+		static void UpdateConjureRecasts(RE::Actor* player, float deltaSeconds);
+		static bool TryRecastSummon(RE::Actor* actor, RE::SpellItem* spell);
+		static void SetEvictionTick();
+
 		static void ClearCache();
 	private:
 		static inline MaintainedEffectsCache cache_;
+
+		static inline int evictionWindowTicks_ = 0;
 	};
 
 	class MaintenanceOrchestrator
@@ -401,6 +425,7 @@ namespace Maint
 		static void UpdatePCMod(RE::PlayerCharacter* pc, float delta);
 
 		static inline REL::Relocation<decltype(UpdatePCMod)> UpdatePC;
+		static inline std::atomic<float> TimerConjureWatch{ 0.0f };
 		static inline std::atomic<float> TimerActiveEffCheck{ 0.0f };
 		static inline std::atomic<float> TimerExperienceAward{ 0.0f };
 	};
@@ -417,6 +442,6 @@ namespace Maint
 
 }  // namespace MAINT
 
-// Global shims (declarations) ó optional
+// Global shims (declarations) ‚Äî optional
 bool Load();
 void OnInit(SKSE::MessagingInterface::Message* const);
