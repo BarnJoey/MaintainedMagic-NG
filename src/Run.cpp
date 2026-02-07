@@ -1063,7 +1063,7 @@ namespace Maint
 			});
 
 		if (pair.isConjureMinion)
-			UpkeepSupervisor::SetEvictionTick();
+			UpkeepSupervisor::SetEvictionTick(caster);
 
 		if (shouldSilenceFX) {
 			spdlog::info("Silencing SpellFX for {}", baseSpell->GetName());
@@ -1385,24 +1385,49 @@ namespace Maint
 		}
 	}
 
-	void UpkeepSupervisor::SetEvictionTick() 
+	void UpkeepSupervisor::SetEvictionTick(RE::Actor* actor)
 	{
+		if (!actor) {
+			return;
+		}
+
+		evictionSnapshot_.clear();
+
+		const auto& activeEffects = cache_.GetFor(actor);
+		auto& registry = MaintainedRegistry::Get().map();
+
+		for (const auto& [baseSpell, pair] : registry) {
+			if (!pair.isConjureMinion) {
+				continue;
+			}
+
+			// Only snapshot conjures that are currently alive
+			if (activeEffects.contains(pair.infinite)) {
+				evictionSnapshot_.insert(pair.infinite);
+			}
+		}
+
+		// Open eviction window (10 ticks ~= 1–2 frames at 0.1–0.25s)
 		evictionWindowTicks_ = 10;
+
+		spdlog::debug(
+			"Eviction window opened with {} tracked conjures",
+			evictionSnapshot_.size());
 	}
 
 	void UpkeepSupervisor::UpdateConjureWatch(RE::Actor* actor)
 	{
-		if (evictionWindowTicks_ <= 0) {
+		if (!actor || evictionWindowTicks_ <= 0) {
 			return;
 		}
 
-		//need to wait a few ticks for a cast to fully remove the old effect
+		// Let the engine finish resolving effects first
 		if (evictionWindowTicks_ > 2) {
-			--evictionWindowTicks_; 
+			--evictionWindowTicks_;
 			return;
 		}
 
-		auto& activeEffects = cache_.GetFor(actor);
+		const auto& activeEffects = cache_.GetFor(actor);
 		auto& registry = MaintainedRegistry::Get().map();
 
 		for (auto& [baseSpell, pair] : registry) {
@@ -1410,25 +1435,35 @@ namespace Maint
 				continue;
 			}
 
-			// Is this conjure currently present on the actor?
-			const bool stillActive = activeEffects.find(pair.infinite) != activeEffects.end();
+			// Only consider conjures that were alive at snapshot time
+			if (!evictionSnapshot_.contains(pair.infinite)) {
+				continue;
+			}
+
+			const bool stillActive =
+				activeEffects.contains(pair.infinite);
 
 			if (stillActive) {
 				continue;
 			}
 
-			// Missing during eviction window → engine-enforced summon limit
+			// This conjure existed, then disappeared shortly after → engine eviction
 			spdlog::debug(
-				"Conjure {} evicted by engine limit",
+				"Conjure {} evicted by engine summon limit",
 				baseSpell->GetName());
 
-			// IMPORTANT: downgrade intent, do NOT delete here
+			// Downgrade intent ONLY
 			pair.isConjureMinion = false;
 			pair.recastQueued = false;
 			pair.recastRemaining = 0.0f;
 		}
 
-		--evictionWindowTicks_; 
+		--evictionWindowTicks_;
+
+		if (evictionWindowTicks_ <= 0) {
+			evictionSnapshot_.clear();
+			spdlog::debug("Eviction window closed");
+		}
 	}
 
 	void UpkeepSupervisor::UpdateConjureRecasts(RE::Actor* player, float deltaSeconds)
@@ -1494,7 +1529,7 @@ namespace Maint
 			actor   // blame actor
 		);
 
-		SetEvictionTick();
+		SetEvictionTick(actor);
 
 		return true;
 	}
