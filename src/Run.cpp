@@ -1,4 +1,4 @@
-﻿#include "Run.hpp"
+#include "Run.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -279,7 +279,7 @@ namespace Maint
 
 	void FXSilencer::SilenceSpellFX(Domain::MaintainedPair& pair)
 	{
-		if (!pair.infinite) {
+		if (!pair.infinite || pair.HasSilencedFX()) {
 			return;
 		}
 
@@ -424,6 +424,8 @@ namespace Maint
 			// Remove this record — it has been fully restored
 			it = pair.silencedEffects.erase(it);
 		}
+
+		pair.silencedEffects.clear();
 	}
 
 	// ================= SpellFactory ==============================================
@@ -443,7 +445,7 @@ namespace Maint
 
 		if (!allocatedFormID) {
 			logger::error(
-				"CreateMaintainSpell() - Failed to allocate FormID (free left: {})",
+				"CreateInfiniteFrom() - Failed to allocate FormID (free left: {})",
 				forms.GetFreeFormIDCount());
 			return nullptr;
 		}
@@ -495,7 +497,7 @@ namespace Maint
 
 		if (!allocatedFormID) {
 			logger::error(
-				"CreateDebuffSpell() - Failed to allocate FormID (free left: {})",
+				"CreateDebuffFrom() - Failed to allocate FormID (free left: {})",
 				forms.GetFreeFormIDCount());
 			return nullptr;
 		}
@@ -1051,6 +1053,18 @@ namespace Maint
 		pair.infinite = maint;
 		pair.debuff = debuff;
 
+		pair.isConjureMinion = std::ranges::any_of(
+			baseSpell->effects,
+			[](RE::Effect* eff) {
+				return eff &&
+			           eff->baseEffect &&
+			           eff->baseEffect->GetArchetype() ==
+			               RE::EffectSetting::Archetype::kSummonCreature;
+			});
+
+		if (pair.isConjureMinion)
+			UpkeepSupervisor::SetEvictionTick();
+
 		if (shouldSilenceFX) {
 			spdlog::info("Silencing SpellFX for {}", baseSpell->GetName());
 			FXSilencer::SilenceSpellFX(pair);
@@ -1157,6 +1171,7 @@ namespace Maint
 	}
 
 	// ================= UpkeepSupervisor ==========================================
+
 	void UpkeepSupervisor::ClearCache(){
 		cache_.Clear();
 	}
@@ -1189,7 +1204,7 @@ namespace Maint
 
 		std::vector<std::pair<RE::SpellItem*, Domain::MaintainedPair>> toRemove;
 
-		for (const auto& [base, pair] : MaintainedRegistry::Get().map()) {
+		for (auto& [base, pair] : MaintainedRegistry::Get().map()) {
 			if (FormsRepository::Get().GlobCleanupRequested->value != 0) {
 				spdlog::debug("Dispelled by player: {}", base->GetName());
 				toRemove.emplace_back(base, pair);
@@ -1239,7 +1254,28 @@ namespace Maint
 
 			const auto& spell2ae = cache_.GetFor(actor);
 			const auto it = spell2ae.find(m);
+
 			if (it == spell2ae.end()) {
+				// Maintained spell no longer present on actor
+
+				if (pair.isConjureMinion) {
+					// Conjured minion died or expired
+
+					if (!pair.recastQueued) {
+						spdlog::debug(
+							"Conjure {} missing — scheduling recast",
+							base->GetName());
+
+						pair.recastQueued = true;
+						pair.recastRemaining = Config::ConjureRecastDelay;
+					}
+
+					// Do NOT remove maintained conjures here
+					// They are handled by the recast update cycle
+					continue;
+				}
+
+				// Non-conjure: normal cleanup
 				spdlog::debug("{} not found on Actor", m->GetName());
 				toRemove.emplace_back(base, pair);
 				continue;
@@ -1303,7 +1339,7 @@ namespace Maint
 		}
 
 		if (!toRemove.empty()) {
-			for (const auto& [base, pair] : toRemove) {
+			for (auto& [base, pair] : toRemove) {
 				auto* m = pair.infinite;
 				auto* d = pair.debuff;
 				spdlog::info("Dispelling missing/invalid {} (0x{:08X})", m->GetName(), m->GetFormID());
@@ -1314,6 +1350,8 @@ namespace Maint
 				}
 
 				if (actor->HasSpell(d)) {
+					FXSilencer::UnsilenceSpellFX(pair); //Unsilence effect before removing
+
 					actor->RemoveSpell(m);
 					actor->RemoveSpell(d);
 
@@ -1345,6 +1383,120 @@ namespace Maint
 			acc = 0.0;
 			cnt = 0;
 		}
+	}
+
+	void UpkeepSupervisor::SetEvictionTick() 
+	{
+		evictionWindowTicks_ = 10;
+	}
+
+	void UpkeepSupervisor::UpdateConjureWatch(RE::Actor* actor)
+	{
+		if (evictionWindowTicks_ <= 0) {
+			return;
+		}
+
+		//need to wait a few ticks for a cast to fully remove the old effect
+		if (evictionWindowTicks_ > 2) {
+			--evictionWindowTicks_; 
+			return;
+		}
+
+		auto& activeEffects = cache_.GetFor(actor);
+		auto& registry = MaintainedRegistry::Get().map();
+
+		for (auto& [baseSpell, pair] : registry) {
+			if (!pair.isConjureMinion) {
+				continue;
+			}
+
+			// Is this conjure currently present on the actor?
+			const bool stillActive = activeEffects.find(pair.infinite) != activeEffects.end();
+
+			if (stillActive) {
+				continue;
+			}
+
+			// Missing during eviction window → engine-enforced summon limit
+			spdlog::debug(
+				"Conjure {} evicted by engine limit",
+				baseSpell->GetName());
+
+			// IMPORTANT: downgrade intent, do NOT delete here
+			pair.isConjureMinion = false;
+			pair.recastQueued = false;
+			pair.recastRemaining = 0.0f;
+		}
+
+		--evictionWindowTicks_; 
+	}
+
+	void UpkeepSupervisor::UpdateConjureRecasts(RE::Actor* player, float deltaSeconds)
+	{
+		if (!player || player->IsDead()) {
+			return;
+		}
+
+		auto& registry = MaintainedRegistry::Get();
+		if (registry.empty()) {
+			return;
+		}
+
+		for (auto& [baseSpell, pair] : registry.map()) {
+			if (!pair.NeedsRecastUpdate()) {
+				continue;
+			}
+
+			pair.recastRemaining -= deltaSeconds;
+			if (pair.recastRemaining > 0.0f) {
+				continue;
+			}
+
+			spdlog::debug(
+				"Recast countdown expired for {}",
+				baseSpell ? baseSpell->GetName() : "<null>");
+
+			const bool success = UpkeepSupervisor::TryRecastSummon(player, pair.infinite);
+
+			pair.recastQueued = false;
+			pair.recastRemaining = 0.0f;
+
+			if (!success) {
+				spdlog::debug(
+					"Conjure recast failed for {}",
+					baseSpell ? baseSpell->GetName() : "<null>");
+			}
+		}
+	}
+
+
+	bool UpkeepSupervisor::TryRecastSummon(RE::Actor* actor, RE::SpellItem* spell)
+	{
+		if (!actor || actor->IsDead() || !spell) {
+			return false;
+		}
+
+		auto* caster =
+			actor->GetMagicCaster(RE::MagicSystem::CastingSource::kLeftHand);
+
+		if (!caster) {
+			return false;
+		}
+
+		// Cast summon (placement uses caster position)
+		caster->CastSpellImmediate(
+			spell,
+			false,  // no hit effect art
+			actor,  // target (ignored for summon placement)
+			1.0f,   // effectiveness
+			false,  // not hostile-only
+			0.0f,   // no magnitude override
+			actor   // blame actor
+		);
+
+		SetEvictionTick();
+
+		return true;
 	}
 
 	void UpkeepSupervisor::CheckUpkeepValidity(RE::Actor* const& actor)
@@ -1570,15 +1722,17 @@ namespace Maint
 					continue;
 				}
 
+				Domain::MaintainedPair pair{};
+
 				// --------------------------------
 				// Create maintained spell
 				// --------------------------------
-				const auto& infSpell =
+				pair.infinite =
 					Maint::SpellFactory::CreateInfiniteFrom(
 						baseSpell,
 						entry.maintainedSpellID != 0x0 ? std::optional<RE::FormID>(entry.maintainedSpellID) : std::nullopt);
 
-				if (!infSpell) {
+				if (!pair.infinite) {
 					logger::error(
 						"\tFailed to create Maintained Spell: {}",
 						baseSpell->GetName());
@@ -1588,25 +1742,34 @@ namespace Maint
 				// --------------------------------
 				// Create debuff spell
 				// --------------------------------
-				const auto& debuffSpell =
+				pair.debuff =
 					Maint::SpellFactory::CreateDebuffFrom(
 						baseSpell,
 						0.0f,
 						entry.debuffSpellID != 0x0 ? std::optional<RE::FormID>(entry.debuffSpellID) : std::nullopt);
 
-				if (!debuffSpell) {
+				if (!pair.debuff) {
 					logger::error(
 						"\tFailed to create Debuff Spell: {}",
 						baseSpell->GetName());
 					return;
 				}
 
+				pair.isConjureMinion = std::ranges::any_of(
+					baseSpell->effects,
+					[](RE::Effect* eff) {
+						return eff &&
+					           eff->baseEffect &&
+					           eff->baseEffect->GetArchetype() ==
+					               RE::EffectSetting::Archetype::kSummonCreature;
+					});
+
 				// --------------------------------
 				// Insert into cache
 				// --------------------------------
 				MaintainedRegistry::Get().insert(
 					baseSpell,
-					{ infSpell, debuffSpell });
+					pair);
 			}
 
 			logger::info(
@@ -1943,12 +2106,19 @@ namespace Maint
 
 		EffectRestorer::Update(delta);
 
+		TimerConjureWatch += delta;
 		TimerActiveEffCheck += delta;
 		TimerExperienceAward += delta;
 
+		 
+		if (TimerConjureWatch >= 0.10f) {
+			UpkeepSupervisor::UpdateConjureWatch(pc);
+			TimerConjureWatch = 0.0f;
+		}
 		if (TimerActiveEffCheck >= 0.50f) {
 			UpkeepSupervisor::ForceMaintainedSpellUpdate(pc);
 			UpkeepSupervisor::CheckUpkeepValidity(pc);
+			UpkeepSupervisor::UpdateConjureRecasts(pc, TimerActiveEffCheck);
 			TimerActiveEffCheck = 0.0f;
 		}
 		if (TimerExperienceAward >= 300) {
@@ -1984,6 +2154,7 @@ namespace Maint
 			if (auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(e->spell)) {
 				MaintenanceOrchestrator::MaintainSpell(spell, caster);
 			}
+
 			return RE::BSEventNotifyControl::kContinue;
 		}
 
@@ -2053,6 +2224,15 @@ namespace Maint
 		} else if (defs && defs->HasKey("Experience", "fMaintainedExpMultiplier")) {
 			Config::MaintainedExpMultiplier =
 				static_cast<float>(defs->GetDoubleValue("Experience", "fMaintainedExpMultiplier"));
+		}
+
+		// --- Minion settings ---
+		if (user && user->HasKey("Minions", "fConjureRespawnDelay")) {
+			Config::ConjureRecastDelay =
+				static_cast<float>(user->GetDoubleValue("Minions", "fConjureRespawnDelay"));
+		} else if (defs && defs->HasKey("Minions", "fConjureRespawnDelay")) {
+			Config::ConjureRecastDelay =
+				static_cast<float>(defs->GetDoubleValue("Minions", "fConjureRespawnDelay"));
 		}
 	}
 
@@ -2236,31 +2416,36 @@ namespace Maint
 					registry.addSilencedSpell(spellName);
 				}
 
+				return RE::BSEventNotifyControl::kContinue;
+			}
+
+			if (a_event->eventName == "MaintainedMagic_MCM_Close") {
 				SaveLoadingService::SaveSilencedFX();
+
+				auto& registry = MaintainedRegistry::Get();
 
 				for (auto& [baseSpell, pair] : registry.map()) {
 					if (!baseSpell || !pair.infinite) {
 						continue;
 					}
 
-					// Name match (MCM works on names, registry is pointer-based)
-					if (spellName != baseSpell->GetName()) {
-						continue;
-					}
-
-					// If FX were disabled → silence now
-					if (!fxEnabled) {
-						spdlog::debug(
-							"[MaintainedMagicNG] Immediately silencing FX for maintained spell: {}",
-							baseSpell->GetName());
-
+					if (Config::DoSilenceFX) {
 						FXSilencer::SilenceSpellFX(pair);
 					} else {
-						spdlog::debug(
-							"[MaintainedMagicNG] Restoring FX (shader fallback only) for maintained spell: {}",
-							baseSpell->GetName());
+						// If FX were disabled → silence now
+						if (registry.shouldSilenceSpell(baseSpell)) {
+							spdlog::debug(
+								"[MaintainedMagicNG] Immediately silencing FX for maintained spell: {}",
+								baseSpell->GetName());
 
-						FXSilencer::UnsilenceSpellFX(pair);
+							FXSilencer::SilenceSpellFX(pair);
+						} else {
+							spdlog::debug(
+								"[MaintainedMagicNG] Restoring FX (shader fallback only) for maintained spell: {}",
+								baseSpell->GetName());
+
+							FXSilencer::UnsilenceSpellFX(pair);
+						}
 					}
 				}
 
@@ -2303,6 +2488,10 @@ namespace Maint
 				// --- Experience ---
 			} else if (id == "fMaintainedExpMultiplier:Experience") {
 				Config::MaintainedExpMultiplier = value;
+
+				// --- Minion settings ---
+			} else if (id == "fConjureRespawnDelay:Minions") {
+				Config::ConjureRecastDelay = value;
 
 			} else {
 				spdlog::warn("[MCM] Unknown setting ID: {}", id);
