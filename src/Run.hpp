@@ -16,6 +16,9 @@
 #include <utility>
 #include <vector>
 
+// Heart of Magic API
+#include "SpellLearningAPI.h"
+
 namespace Maint
 {
 	// ===== Global config values (backed by INI) ==================================
@@ -30,7 +33,7 @@ namespace Maint
 
 		inline std::string SAVES_PATH = "disabled";
 		inline bool DoSilenceFX = false;
-		inline long CostBaseDuration = 60;  // seconds, “neutral” duration
+		inline long CostBaseDuration = 60;  // seconds, neutral duration
 		inline float UpkeepDurationExponent = 0.45f;  // driven by difficulty slider
 		inline float UpkeepAsymptoteKnee = 0.4f;
 		inline bool AllowBoundWeapons = true;
@@ -82,6 +85,27 @@ namespace Maint
 			void operator=(ConfigBase const&) = delete;
 		};
 	}  // namespace CONFIG
+
+	// ===== Heart of Magic handler ================================================
+
+	class HeartofMagic_Handler
+	{
+	public:
+		static void GrantXPForMaintainedSpell(RE::SpellItem* spell);
+		static void OnSpellLearningMessage(SKSE::MessagingInterface::Message* a_msg);
+
+		static bool IsAPIValid();
+		static bool RegisterXPSource();
+
+	private:
+		static inline SpellLearning::ISpellLearningAPI* g_api = nullptr;
+		static inline bool g_sourceRegistered = false;
+
+		static inline constexpr const char* SOURCE_ID = "maintained_magic_ng";
+		static inline constexpr const char* SOURCE_DISPLAY = "Maintained Magic NG";
+
+		static inline constexpr float fHeartofMagicbaseXP = 15.0f;  //what base XP per-5 minutes (out of 100 total XP, can be reduced via Heart of Magic UI)
+	};
 
 	// ===== Domain Types ==========================================================
 
@@ -444,6 +468,6 @@ namespace Maint
 
 }  // namespace MAINT
 
-// Global shims (declarations) — optional
+// Global shims (declarations)  optional
 bool Load();
 void OnInit(SKSE::MessagingInterface::Message* const);
