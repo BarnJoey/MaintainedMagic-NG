@@ -112,6 +112,61 @@ namespace Maint
 	}
 	void Config::ConfigBase::Save() { ini_.SaveFile(path_.c_str()); }
 
+	// ===== Heart of Magic handler ================================================
+
+	void HeartofMagic_Handler::GrantXPForMaintainedSpell(RE::SpellItem* spell)
+	{
+		if (!IsAPIValid())
+			return;
+
+		uint32_t targetId = spell->GetFormID();
+
+		if (targetId == 0)
+		{
+			logger::error("[MaintainedMagicNG]: Error, Spell ID invalid");
+			return;
+		}
+			
+		float actual = g_api->AddSourcedXP(targetId, fHeartofMagicbaseXP, SOURCE_ID);
+		logger::info("[MaintainedMagicNG]: Granting XP via Heart of Magic API: {:.1f} XP granted to {:08X}", actual, targetId);
+	}
+
+	void HeartofMagic_Handler::OnSpellLearningMessage(SKSE::MessagingInterface::Message* a_msg)
+	{
+		if (!a_msg)
+			return;
+
+		if (a_msg->type == SpellLearning::kMessageType_APIReady && a_msg->data) {
+			g_api = static_cast<SpellLearning::ISpellLearningAPI*>(a_msg->data);
+			logger::info("[MaintainedMagicNG]: Received SpellLearning API v{} - full access available!",
+				g_api->GetAPIVersion());
+		} else {
+			logger::info("[MaintainedMagicNG]: Received message from SpellLearning (type=0x{:X}, data={})",
+				a_msg->type, a_msg->data ? "valid" : "null");
+		}
+	}
+
+	bool HeartofMagic_Handler::IsAPIValid()
+	{
+		return g_api != nullptr;
+	}
+
+	bool HeartofMagic_Handler::RegisterXPSource()
+	{
+		bool ok = false;
+		// Register our XP source via the API (creates UI controls in settings)
+		if (IsAPIValid() && !g_sourceRegistered) {
+			ok = g_api->RegisterXPSource(SOURCE_ID, SOURCE_DISPLAY);
+			logger::info("[MaintainedMagicNG]: RegisterXPSource('{}', '{}') = {}",
+				SOURCE_ID, SOURCE_DISPLAY, ok);
+			g_sourceRegistered = true;
+		} else if (!IsAPIValid()) {
+			logger::warn("[MaintainedMagicNG]: API not available at kDataLoaded - source not registered");
+		}
+
+		return ok;
+	}
+
 	// ================= FormsRepository ===========================================
 
 	FormsRepository& FormsRepository::Get()
@@ -1007,8 +1062,11 @@ namespace Maint
 		if (Config::MaintainedExpMultiplier <= 0.0f)
 			return;
 		for (const auto& [base, _] : MaintainedRegistry::Get().map()) {
-			const float baseCost = base->CalculateMagickaCost(nullptr);
-			player->AddSkillExperience(base->GetAssociatedSkill(), baseCost * Config::MaintainedExpMultiplier);
+			const float adjCost = base->CalculateMagickaCost(nullptr) * Config::MaintainedExpMultiplier;
+			player->AddSkillExperience(base->GetAssociatedSkill(), adjCost);
+
+			//grant XP towards maintained spell
+			HeartofMagic_Handler::GrantXPForMaintainedSpell(base);
 		}
 	}
 
@@ -1062,8 +1120,10 @@ namespace Maint
 			               RE::EffectSetting::Archetype::kSummonCreature;
 			});
 
-		if (pair.isConjureMinion)
+		if (pair.isConjureMinion) {
+			spdlog::debug("{} is a Conjured Creature", baseSpell->GetName());
 			UpkeepSupervisor::SetEvictionTick(caster);
+		}
 
 		if (shouldSilenceFX) {
 			spdlog::info("Silencing SpellFX for {}", baseSpell->GetName());
@@ -1255,86 +1315,107 @@ namespace Maint
 			const auto& spell2ae = cache_.GetFor(actor);
 			const auto it = spell2ae.find(m);
 
-			if (it == spell2ae.end()) {
-				// Maintained spell no longer present on actor
+			// Conjure Maintain check, will queue for resummon upon invalidation rather then dispell/unmaintain
+			if (pair.isConjureMinion) {
+				//recast is already queued. don't need to check anything
+				if (pair.recastQueued)
+					continue;
 
-				if (pair.isConjureMinion) {
-					// Conjured minion died or expired
+				bool summonMissing = false;
 
-					if (!pair.recastQueued) {
-						spdlog::debug(
-							"Conjure {} missing — scheduling recast",
-							base->GetName());
+				//case 1. maintain spell is missing (usual case)
+				if (it == spell2ae.end()) {
+					spdlog::debug("Conjure {} missing", base->GetName());
+					summonMissing = true;
+				} else {
+					const auto& effSet = it->second;
 
-						pair.recastQueued = true;
-						pair.recastRemaining = Config::ConjureRecastDelay;
+					//case 2. one of the active effects are missing (some mods do this on conjure death instead)
+					if (m->effects.size() < effSet.size()) {
+						spdlog::debug("Conjure {} has too many effects, removing", base->GetName());
+						toRemove.emplace_back(base, pair);
+						continue;
+					} else if (m->effects.size() > effSet.size()) {
+						spdlog::debug("Conjure {} has too few effects", base->GetName());
+						summonMissing = true;
 					}
-
-					// Do NOT remove maintained conjures here
-					// They are handled by the recast update cycle
-					continue;
 				}
+				
+				//Conjure spell is invalid in some way. we will just assume it died and needs a resummon
+				if (summonMissing) {
+					spdlog::debug("Conjure {} missing — scheduling recast", base->GetName());
 
-				// Non-conjure: normal cleanup
-				spdlog::debug("{} not found on Actor", m->GetName());
-				toRemove.emplace_back(base, pair);
-				continue;
-			}
-
-			const auto& effSet = it->second;
-
-			if (m->effects.size() < effSet.size()) {
-				spdlog::trace("{} EFF mismatch: LESS", m->GetName());
-				toRemove.emplace_back(base, pair);
-				continue;
-			} else if (m->effects.size() > effSet.size()) {
-				spdlog::trace("{} EFF mismatch: MORE", m->GetName());
-
-				const auto getUniques = [](const RE::BSTArray<RE::Effect*>& arr) {
-					std::set<RE::TESForm*> uniq;
-					std::vector<RE::Effect*> out;
-					out.reserve(arr.size());
-					for (auto* item : arr) {
-						auto* assoc = item->baseEffect->data.associatedForm;
-						if (assoc && uniq.insert(assoc).second)
-							out.push_back(item);
-					}
-					return out;
-				};
-				const auto uniqueList = getUniques(m->effects);
-
-				const auto wrongSrc = std::find_if(effSet.begin(), effSet.end(), [&](RE::ActiveEffect* e) {
-					return e->spell->As<RE::SpellItem>() != m;
-				});
-				if (wrongSrc != effSet.end()) {
-					spdlog::debug("\tSource mismatch; found at least one: {} (0x{:08X})",
-						(*wrongSrc)->spell->GetName(), (*wrongSrc)->spell->GetFormID());
-					toRemove.emplace_back(base, pair);
-					continue;
-				}
-				if (!uniqueList.empty() && uniqueList.size() > effSet.size()) {
-					spdlog::debug("\tExclusives are missing");
-					toRemove.emplace_back(base, pair);
-					continue;
+					pair.recastQueued = true;
+					pair.recastRemaining = Config::ConjureRecastDelay;
 				}
 			} else {
-				constexpr uint32_t HUGE_DUR = 60 * 60 * 24 * 356;
-				const auto wrongDur = std::find_if(effSet.begin(), effSet.end(), [&](RE::ActiveEffect* e) {
-					return e->duration > 0.0 && static_cast<uint32_t>(e->duration - e->elapsedSeconds) < HUGE_DUR;
-				});
-				if (wrongDur != effSet.end()) {
-					spdlog::debug("EFF duration mismatch");
+			// non-Conjure Maintain check. this is for all other kinds of spells
+
+				//case 1. maintain spell is missing
+				if (it == spell2ae.end()) {
+					spdlog::debug("{} not found on Actor", m->GetName());
 					toRemove.emplace_back(base, pair);
 					continue;
 				}
-			}
 
-			const auto active = std::find_if(effSet.begin(), effSet.end(), [](RE::ActiveEffect* e) {
-				return !e->flags.any(RE::ActiveEffect::Flag::kInactive, RE::ActiveEffect::Flag::kDispelled);
-			});
-			if (active == effSet.end()) {
-				spdlog::debug("{} has zero actives", m->GetName());
-				toRemove.emplace_back(base, pair);
+				const auto& effSet = it->second;
+
+				//case 2. magic effect mis-match
+
+				if (m->effects.size() < effSet.size()) {
+					spdlog::trace("{} EFF mismatch: LESS", m->GetName());
+					toRemove.emplace_back(base, pair);
+					continue;
+				} else if (m->effects.size() > effSet.size()) {
+					spdlog::trace("{} EFF mismatch: MORE", m->GetName());
+
+					const auto getUniques = [](const RE::BSTArray<RE::Effect*>& arr) {
+						std::set<RE::TESForm*> uniq;
+						std::vector<RE::Effect*> out;
+						out.reserve(arr.size());
+						for (auto* item : arr) {
+							auto* assoc = item->baseEffect->data.associatedForm;
+							if (assoc && uniq.insert(assoc).second)
+								out.push_back(item);
+						}
+						return out;
+					};
+					const auto uniqueList = getUniques(m->effects);
+
+					const auto wrongSrc = std::find_if(effSet.begin(), effSet.end(), [&](RE::ActiveEffect* e) {
+						return e->spell->As<RE::SpellItem>() != m;
+					});
+					if (wrongSrc != effSet.end()) {
+						spdlog::debug("\tSource mismatch; found at least one: {} (0x{:08X})",
+							(*wrongSrc)->spell->GetName(), (*wrongSrc)->spell->GetFormID());
+						toRemove.emplace_back(base, pair);
+						continue;
+					}
+					if (!uniqueList.empty() && uniqueList.size() > effSet.size()) {
+						spdlog::debug("\tExclusives are missing");
+						toRemove.emplace_back(base, pair);
+						continue;
+					}
+				} else {
+					constexpr uint32_t HUGE_DUR = 60 * 60 * 24 * 356;
+					const auto wrongDur = std::find_if(effSet.begin(), effSet.end(), [&](RE::ActiveEffect* e) {
+						return e->duration > 0.0 && static_cast<uint32_t>(e->duration - e->elapsedSeconds) < HUGE_DUR;
+					});
+					if (wrongDur != effSet.end()) {
+						spdlog::debug("EFF duration mismatch");
+						toRemove.emplace_back(base, pair);
+						continue;
+					}
+				}
+
+				//case 3. no active effects on spell
+				const auto active = std::find_if(effSet.begin(), effSet.end(), [](RE::ActiveEffect* e) {
+					return !e->flags.any(RE::ActiveEffect::Flag::kInactive, RE::ActiveEffect::Flag::kDispelled);
+				});
+				if (active == effSet.end()) {
+					spdlog::debug("{} has zero actives", m->GetName());
+					toRemove.emplace_back(base, pair);
+				}
 			}
 		}
 
@@ -1517,6 +1598,9 @@ namespace Maint
 		if (!caster) {
 			return false;
 		}
+
+		//remove old spell first if it exists
+		actor->RemoveSpell(spell);
 
 		// Cast summon (placement uses caster position)
 		caster->CastSpellImmediate(
@@ -2572,6 +2656,7 @@ namespace Maint
 			break;
 		case SKSE::MessagingInterface::kDataLoaded:
 			ReadConfiguration();
+			HeartofMagic_Handler::RegisterXPSource();
 			break;
 		case SKSE::MessagingInterface::kPreLoadGame:
 			if (msg->dataLen > 0) {
@@ -2623,4 +2708,9 @@ bool Load()
 void OnInit(SKSE::MessagingInterface::Message* const msg)
 {
 	Maint::OnInit(msg);
+}
+
+void OnSpellLearningMessage(SKSE::MessagingInterface::Message* a_msg)
+{
+	Maint::HeartofMagic_Handler::OnSpellLearningMessage(a_msg);
 }
